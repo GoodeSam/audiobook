@@ -107,8 +107,11 @@ dropZone.addEventListener('change', (e) => {
   }
 });
 dropZone.addEventListener('click', (e) => {
-  // Don't interfere with the file input or its label
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'LABEL') return;
+  // Don't interfere with the file input or its wrapping label — the native
+  // label-input association already opens the picker. Calling input.click()
+  // on top of that would double-fire, causing the picker to open then
+  // immediately close on some browsers, requiring a second attempt.
+  if (e.target.closest('label') || e.target.tagName === 'INPUT') return;
   const input = getFileInput();
   if (input) input.click();
 });
