@@ -97,15 +97,20 @@ dropZone.addEventListener('drop', (e) => {
   if (file?.name.endsWith('.epub')) handleFile(file);
 });
 
-// Use event delegation so it works after innerHTML replacements
+// Use event delegation so it works after innerHTML replacements.
+// Reset the input value after handling so the same file can be re-selected.
 dropZone.addEventListener('change', (e) => {
-  if (e.target.type === 'file' && e.target.files[0]) handleFile(e.target.files[0]);
+  if (e.target.type === 'file' && e.target.files[0]) {
+    const file = e.target.files[0];
+    e.target.value = '';
+    handleFile(file);
+  }
 });
 dropZone.addEventListener('click', (e) => {
-  if (e.target.tagName !== 'INPUT') {
-    const input = getFileInput();
-    if (input) input.click();
-  }
+  // Don't interfere with the file input or its label
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'LABEL') return;
+  const input = getFileInput();
+  if (input) input.click();
 });
 
 async function handleFile(file) {
