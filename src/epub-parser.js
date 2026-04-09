@@ -64,9 +64,10 @@ export async function parseEPUB(file) {
   const tocTitles = await parseTOC(zip, opfDoc, opfDir, parser);
 
   // 6. Build a map of spine href -> TOC title
+  // TOC hrefs are already resolved to be relative to the OPF directory (opfDir)
+  // so they can be directly compared with spine hrefs.
   const hrefToTitle = {};
   for (const entry of tocTitles) {
-    // Match by stripping fragment identifiers
     const baseHref = entry.href.split('#')[0];
     if (!hrefToTitle[baseHref]) {
       hrefToTitle[baseHref] = entry.title;
@@ -105,16 +106,24 @@ async function parseTOC(zip, opfDoc, opfDir, parser) {
   // Try NAV (EPUB3) first
   const navItem = opfDoc.querySelector('manifest item[properties~="nav"]');
   if (navItem) {
-    const navHref = opfDir + navItem.getAttribute('href');
-    const navXml = await zip.file(navHref)?.async('text');
+    const navRelHref = navItem.getAttribute('href');
+    const navFullPath = opfDir + navRelHref;
+    const navDir = dirOf(navFullPath);
+    const navXml = await zip.file(navFullPath)?.async('text');
     if (navXml) {
       const navDoc = parser.parseFromString(navXml, 'application/xhtml+xml');
       const navEl = navDoc.querySelector('nav[*|type="toc"], nav.toc, nav');
       if (navEl) {
         for (const a of navEl.querySelectorAll('a[href]')) {
+          const rawHref = a.getAttribute('href');
+          // Resolve href relative to the NAV file, then make relative to opfDir
+          const resolvedHref = resolveRelativePath(navDir, rawHref);
+          const relToOpf = opfDir && resolvedHref.startsWith(opfDir)
+            ? resolvedHref.substring(opfDir.length)
+            : resolvedHref;
           entries.push({
             title: a.textContent.trim(),
-            href: a.getAttribute('href'),
+            href: relToOpf,
           });
         }
         if (entries.length > 0) return entries;
@@ -127,15 +136,22 @@ async function parseTOC(zip, opfDoc, opfDir, parser) {
     item => item.getAttribute('media-type') === 'application/x-dtbncx+xml'
   );
   if (ncxItem) {
-    const ncxHref = opfDir + ncxItem.getAttribute('href');
-    const ncxXml = await zip.file(ncxHref)?.async('text');
+    const ncxRelHref = ncxItem.getAttribute('href');
+    const ncxFullPath = opfDir + ncxRelHref;
+    const ncxDir = dirOf(ncxFullPath);
+    const ncxXml = await zip.file(ncxFullPath)?.async('text');
     if (ncxXml) {
       const ncxDoc = parser.parseFromString(ncxXml, 'application/xml');
       for (const navPoint of ncxDoc.querySelectorAll('navPoint')) {
         const text = navPoint.querySelector('navLabel text')?.textContent?.trim();
         const src = navPoint.querySelector('content')?.getAttribute('src');
         if (text && src) {
-          entries.push({ title: text, href: src });
+          // Resolve href relative to the NCX file, then make relative to opfDir
+          const resolvedHref = resolveRelativePath(ncxDir, src);
+          const relToOpf = opfDir && resolvedHref.startsWith(opfDir)
+            ? resolvedHref.substring(opfDir.length)
+            : resolvedHref;
+          entries.push({ title: text, href: relToOpf });
         }
       }
     }
@@ -148,7 +164,7 @@ async function parseTOC(zip, opfDoc, opfDir, parser) {
  * Resolve image src attributes in HTML to base64 data URLs.
  */
 async function resolveImages(html, docPath, zip) {
-  const docDir = docPath.includes('/') ? docPath.substring(0, docPath.lastIndexOf('/') + 1) : '';
+  const docDir = dirOf(docPath);
 
   // Find all image src references
   const imgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
@@ -159,7 +175,7 @@ async function resolveImages(html, docPath, zip) {
     const src = match[1];
     if (src.startsWith('data:')) continue;
 
-    // Resolve relative path
+    // Resolve relative path against the document's directory
     const imgPath = resolveRelativePath(docDir, src);
     const imgFile = zip.file(imgPath);
     if (imgFile) {
@@ -180,14 +196,28 @@ async function resolveImages(html, docPath, zip) {
   return result;
 }
 
-function resolveRelativePath(basePath, relativePath) {
+/**
+ * Get the directory portion of a path (everything up to and including the last /).
+ * Returns '' if there is no directory component.
+ */
+function dirOf(path) {
+  const idx = path.lastIndexOf('/');
+  return idx >= 0 ? path.substring(0, idx + 1) : '';
+}
+
+/**
+ * Resolve a relative path against a base directory path.
+ * basePath should be a directory (ending with / or empty string), not a file path.
+ */
+function resolveRelativePath(baseDir, relativePath) {
   if (relativePath.startsWith('/')) return relativePath.substring(1);
 
-  const parts = basePath.split('/').filter(Boolean);
-  parts.pop(); // remove filename from base
-  for (const segment of relativePath.split('/')) {
+  // baseDir already points to the directory, so we just append and normalize
+  const combined = baseDir + relativePath;
+  const parts = [];
+  for (const segment of combined.split('/')) {
     if (segment === '..') parts.pop();
-    else if (segment !== '.') parts.push(segment);
+    else if (segment !== '' && segment !== '.') parts.push(segment);
   }
   return parts.join('/');
 }

@@ -37,21 +37,19 @@ git push -u origin main
 
 
 
+\>> 当书籍上传至audiobook以后，没有做任何选择，就一直显示working，解决。 Fix the audiobook uploader to resolve the 'working' status after upload completes, regardless of user selection.
 
 
-\>> 使用TDD实现：
+
+\>> 让codex评价当前代码对功能实现的效果
+
+\>> 后续每次代码有改动，都直接上传到github上
+
+
 
 /codex-toolkit:audit
 
-### 将 git remote add origin [git\@github.com](mailto:git@github.com):GoodeSam/DinnerDecided1.git
-
-git branch -M main
-
-git push -u origin main
-
-的内容拉回本地
-
-Append the current output report（English first and then Chinese） to the end of this Markdown file instead of overwriting it.
+### Append the current output report（English first and then Chinese） to the end of this Markdown file instead of overwriting it.
 
 ### `/codex-toolkit:audit-fix`
 

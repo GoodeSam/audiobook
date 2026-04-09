@@ -44,7 +44,11 @@ export async function msGetAuthToken(fetchFn = fetch) {
  */
 export async function translateText(text, from, to, fetchFn = fetch) {
   const token = await msGetAuthToken(fetchFn);
-  const params = new URLSearchParams({ 'api-version': '3.0', from, to });
+  const params = new URLSearchParams({ 'api-version': '3.0', to });
+  // Only set 'from' if explicitly provided and not 'auto'; omitting lets Microsoft auto-detect
+  if (from && from !== 'auto') {
+    params.set('from', from);
+  }
 
   const resp = await fetchFn(`${MS_TRANSLATE_URL}?${params.toString()}`, {
     method: 'POST',

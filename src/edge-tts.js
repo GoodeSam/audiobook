@@ -10,7 +10,7 @@
  * - bilingual: interleave original and translated per paragraph
  */
 
-import { detectLanguage } from './language-utils.js';
+import { detectLanguage, splitByLanguage } from './language-utils.js';
 
 const EDGE_TTS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
 const EDGE_TTS_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
@@ -175,6 +175,26 @@ export function splitIntoParagraphs(text) {
 }
 
 /**
+ * Split a paragraph into language segments for dual-voice routing.
+ * If the paragraph contains mixed Chinese/English, it will be split into
+ * separate segments. Pure single-language paragraphs remain as one segment.
+ */
+function splitParaIntoSegments(text, segments) {
+  const langSegments = splitByLanguage(text);
+  if (langSegments.length <= 1) {
+    // Single language — use paragraph-level detection
+    segments.push({ text: text.trim(), lang: detectLanguage(text) });
+    return;
+  }
+  for (const seg of langSegments) {
+    const trimmed = seg.text.trim();
+    if (trimmed) {
+      segments.push({ text: trimmed, lang: seg.lang });
+    }
+  }
+}
+
+/**
  * Build an ordered list of TTS segments from chapter text.
  * Each segment has { text, lang } for voice/speed routing.
  *
@@ -194,22 +214,18 @@ export function buildChapterSegments({ originalText, translatedText, audioMode }
     for (const para of transParas) {
       const clean = stripMarkdown(para);
       if (!clean.trim()) continue;
-      segments.push({ text: clean, lang: detectLanguage(clean) });
+      splitParaIntoSegments(clean, segments);
     }
   } else if (audioMode === 'bilingual') {
     const maxLen = Math.max(origParas.length, transParas.length);
     for (let i = 0; i < maxLen; i++) {
       if (i < origParas.length) {
         const cleanOrig = stripMarkdown(origParas[i]);
-        if (cleanOrig.trim()) {
-          segments.push({ text: cleanOrig, lang: detectLanguage(cleanOrig) });
-        }
+        if (cleanOrig.trim()) splitParaIntoSegments(cleanOrig, segments);
       }
       if (i < transParas.length) {
         const cleanTrans = stripMarkdown(transParas[i]);
-        if (cleanTrans.trim()) {
-          segments.push({ text: cleanTrans, lang: detectLanguage(cleanTrans) });
-        }
+        if (cleanTrans.trim()) splitParaIntoSegments(cleanTrans, segments);
       }
     }
   } else {
@@ -217,7 +233,7 @@ export function buildChapterSegments({ originalText, translatedText, audioMode }
     for (const para of origParas) {
       const clean = stripMarkdown(para);
       if (!clean.trim()) continue;
-      segments.push({ text: clean, lang: detectLanguage(clean) });
+      splitParaIntoSegments(clean, segments);
     }
   }
 

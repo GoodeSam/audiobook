@@ -173,4 +173,29 @@ describe('buildChapterSegments', () => {
     expect(segments.length).toBe(1);
     expect(segments[0].text).toBe('Real text.');
   });
+
+  it('splits mixed-language paragraph into language segments', () => {
+    const segments = buildChapterSegments({
+      originalText: 'Hello 你好世界 goodbye',
+      audioMode: 'original',
+    });
+
+    // Should produce at least 2 segments: English and Chinese parts
+    expect(segments.length).toBeGreaterThanOrEqual(2);
+    const enSeg = segments.find(s => s.lang === 'en');
+    const zhSeg = segments.find(s => s.lang === 'zh');
+    expect(enSeg).toBeDefined();
+    expect(zhSeg).toBeDefined();
+    expect(zhSeg.text).toContain('你好世界');
+  });
+
+  it('keeps pure single-language paragraph as one segment', () => {
+    const segments = buildChapterSegments({
+      originalText: 'This is a purely English paragraph.',
+      audioMode: 'original',
+    });
+
+    expect(segments.length).toBe(1);
+    expect(segments[0].lang).toBe('en');
+  });
 });

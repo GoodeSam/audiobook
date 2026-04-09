@@ -275,7 +275,7 @@ btnTranslateSelected.addEventListener('click', async () => {
 async function translateSingleChapter(idx) {
   const ch = state.book.chapters[idx];
   const toLang = translateLangSelect.value;
-  const fromLang = detectSourceLang(toLang);
+  const fromLang = detectSourceLang();
   state.generating = true;
   showProgress('Translating: ' + ch.title);
 
@@ -301,33 +301,43 @@ async function translateSingleChapter(idx) {
 async function translateMultipleChapters(indices) {
   state.generating = true;
   const toLang = translateLangSelect.value;
-  const fromLang = detectSourceLang(toLang);
-  const total = indices.length;
+  const fromLang = detectSourceLang();
+  const toTranslate = indices.filter(i => !state.book.chapters[i].translatedMarkdown);
+
+  const tracker = new ProgressTracker([{ name: 'translating', weight: 1.0 }]);
+  tracker.onProgress((s) => {
+    progressBar.style.width = `${s.overallPercent}%`;
+    progressText.textContent = tracker.statusText;
+  });
 
   showProgress('Translating chapters...');
 
   try {
+    // Count total paragraphs across all chapters for accurate progress
+    let totalParas = 0;
+    for (const idx of toTranslate) {
+      const md = state.book.chapters[idx].markdown;
+      totalParas += md.split(/\n\n+/).filter(p => p.trim()).length;
+    }
+    tracker.startPhase('translating', totalParas);
+    let completedParas = 0;
+
     for (let i = 0; i < indices.length; i++) {
       const idx = indices[i];
       const ch = state.book.chapters[idx];
 
-      if (ch.translatedMarkdown) {
-        updateProgress(i + 1, total, `Chapter ${i + 1}/${total} (cached)`);
-        continue;
-      }
+      if (ch.translatedMarkdown) continue;
 
-      progressTitle.textContent = `Translating ${i + 1}/${total}: ${ch.title}`;
+      progressTitle.textContent = `Translating ${i + 1}/${indices.length}: ${ch.title}`;
       resetTranslationState();
 
       const translated = await translateChapter(ch.markdown, fromLang, toLang, {
-        onProgress: (current, paraTotal) => {
-          const chapterPct = current / paraTotal;
-          const overallPct = ((i + chapterPct) / total) * 100;
-          progressBar.style.width = `${overallPct}%`;
-          progressText.textContent = `Chapter ${i + 1}/${total} — Paragraph ${current}/${paraTotal}`;
+        onProgress: (current) => {
+          tracker.advance(completedParas + current);
         },
       });
 
+      completedParas += ch.markdown.split(/\n\n+/).filter(p => p.trim()).length;
       ch.translatedMarkdown = translated;
       renderChapterList();
     }
@@ -345,10 +355,8 @@ async function translateMultipleChapters(indices) {
   }
 }
 
-function detectSourceLang(targetLang) {
-  // If translating to Chinese, source is English and vice versa
-  if (targetLang.startsWith('zh')) return 'en';
-  return 'en'; // Default source is English; Microsoft auto-detects anyway
+function detectSourceLang() {
+  return 'auto'; // Let Microsoft auto-detect the source language
 }
 
 // ── Audio generation ──
@@ -418,69 +426,77 @@ async function generateMultipleChapters(indices) {
   const mode = audioModeSelect.value;
   const total = indices.length;
   const needsTranslation = mode === 'translated' || mode === 'bilingual';
+  const toTranslate = needsTranslation
+    ? indices.filter(i => !state.book.chapters[i].translatedMarkdown)
+    : [];
+  const toGenerate = indices.filter(i => !state.audioBlobs[i]);
 
-  showProgress('Generating chapters...');
+  // Build weighted phases: translation gets weight proportional to chapters needing it
+  const phases = [];
+  if (toTranslate.length > 0) phases.push({ name: 'translating', weight: 0.3 });
+  if (toGenerate.length > 0) phases.push({ name: 'generating', weight: 0.7 });
+  if (phases.length === 0) return;
+  // If only one phase, give it full weight
+  if (phases.length === 1) phases[0].weight = 1.0;
+
+  const tracker = new ProgressTracker(phases);
+  tracker.onProgress((s) => {
+    progressBar.style.width = `${s.overallPercent}%`;
+    progressText.textContent = tracker.statusText;
+  });
+
+  showProgress('Processing chapters...');
 
   try {
-    // Phase 1: Translate any that need it
-    if (needsTranslation) {
-      const toTranslate = indices.filter(i => !state.book.chapters[i].translatedMarkdown);
-      if (toTranslate.length > 0) {
-        progressTitle.textContent = 'Translating chapters...';
-        const toLang = translateLangSelect.value;
-        const fromLang = detectSourceLang(toLang);
+    // Phase 1: Translate
+    if (toTranslate.length > 0) {
+      const toLang = translateLangSelect.value;
+      const fromLang = detectSourceLang();
+      tracker.startPhase('translating', toTranslate.length);
 
-        for (let i = 0; i < toTranslate.length; i++) {
-          const idx = toTranslate[i];
-          const ch = state.book.chapters[idx];
-          progressTitle.textContent = `Translating ${i + 1}/${toTranslate.length}: ${ch.title}`;
-          resetTranslationState();
+      for (let i = 0; i < toTranslate.length; i++) {
+        const idx = toTranslate[i];
+        const ch = state.book.chapters[idx];
+        progressTitle.textContent = `Translating ${i + 1}/${toTranslate.length}: ${ch.title}`;
+        resetTranslationState();
 
-          const translated = await translateChapter(ch.markdown, fromLang, toLang, {
-            onProgress: (current, paraTotal) => {
-              const pct = ((i + current / paraTotal) / toTranslate.length) * 30; // 30% of total
-              progressBar.style.width = `${pct}%`;
-              progressText.textContent = `Translating ${i + 1}/${toTranslate.length}: paragraph ${current}/${paraTotal}`;
-            },
-          });
-          ch.translatedMarkdown = translated;
-          renderChapterList();
-        }
+        const translated = await translateChapter(ch.markdown, fromLang, toLang, {
+          onProgress: (current, paraTotal) => {
+            tracker.advance(i + current / paraTotal);
+          },
+        });
+        ch.translatedMarkdown = translated;
+        tracker.advance(i + 1);
+        renderChapterList();
       }
     }
 
     // Phase 2: Generate audio
-    for (let i = 0; i < indices.length; i++) {
-      const idx = indices[i];
-      const ch = state.book.chapters[idx];
+    if (toGenerate.length > 0) {
+      tracker.startPhase('generating', toGenerate.length);
 
-      if (state.audioBlobs[idx]) {
-        const pct = 30 + ((i + 1) / total) * 70;
-        progressBar.style.width = `${pct}%`;
-        progressText.textContent = `Chapter ${i + 1}/${total} (cached)`;
-        continue;
+      for (let i = 0; i < toGenerate.length; i++) {
+        const idx = toGenerate[i];
+        const ch = state.book.chapters[idx];
+        progressTitle.textContent = `Generating ${i + 1}/${toGenerate.length}: ${ch.title}`;
+
+        const blob = await generateChapterAudio({
+          originalText: ch.markdown,
+          translatedText: ch.translatedMarkdown,
+          audioMode: mode,
+          voiceEn: voiceEnSelect.value,
+          voiceZh: voiceZhSelect.value,
+          speechRateEn: parseInt(speedEnRange.value),
+          speechRateZh: parseInt(speedZhRange.value),
+          onProgress: (current, segTotal) => {
+            tracker.advance(i + current / segTotal);
+          },
+        });
+
+        state.audioBlobs[idx] = blob;
+        tracker.advance(i + 1);
+        renderChapterList();
       }
-
-      progressTitle.textContent = `Generating ${i + 1}/${total}: ${ch.title}`;
-
-      const blob = await generateChapterAudio({
-        originalText: ch.markdown,
-        translatedText: ch.translatedMarkdown,
-        audioMode: mode,
-        voiceEn: voiceEnSelect.value,
-        voiceZh: voiceZhSelect.value,
-        speechRateEn: parseInt(speedEnRange.value),
-        speechRateZh: parseInt(speedZhRange.value),
-        onProgress: (current, segTotal) => {
-          const chapterPct = current / segTotal;
-          const overallPct = 30 + ((i + chapterPct) / total) * 70;
-          progressBar.style.width = `${overallPct}%`;
-          progressText.textContent = `Chapter ${i + 1}/${total} — Segment ${current}/${segTotal}`;
-        },
-      });
-
-      state.audioBlobs[idx] = blob;
-      renderChapterList();
     }
 
     updateBulkButtons();
@@ -597,10 +613,23 @@ function downloadBlob(blob, filename) {
 }
 
 /**
+ * Escape HTML entities to prevent XSS from untrusted EPUB content.
+ */
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
  * Simple markdown to HTML renderer for display.
+ * Escapes raw HTML first, then applies markdown transformations.
  */
 function renderMarkdownHtml(md) {
-  let html = md
+  // First escape all HTML to prevent XSS, then apply markdown rules
+  let html = escapeHtml(md)
     .replace(/```([^`]*?)```/gs, '<pre><code>$1</code></pre>')
     .replace(/^######\s+(.+)$/gm, '<h6>$1</h6>')
     .replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>')
@@ -611,10 +640,13 @@ function renderMarkdownHtml(md) {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    // Only allow data: and https: image sources after escaping
+    .replace(/!\[([^\]]*)\]\((data:[^)]+|https:\/\/[^)]+)\)/g, '<img alt="$1" src="$2">')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1') // Strip non-safe image URLs
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" rel="noopener noreferrer">$1</a>')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Strip non-http links
     .replace(/^---+$/gm, '<hr>')
-    .replace(/^>\s+(.+)$/gm, '<blockquote>$1</blockquote>')
+    .replace(/^&gt;\s+(.+)$/gm, '<blockquote>$1</blockquote>')
     .replace(/\n\n+/g, '</p><p>')
     .replace(/\n/g, '<br>');
 

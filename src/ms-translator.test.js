@@ -112,6 +112,20 @@ describe('translateText', () => {
     expect(url).toContain('to=zh-Hans');
   });
 
+  it('omits from param when set to auto for auto-detection', async () => {
+    const fetchFn = mockFetch([
+      okTextResponse('token'),
+      okJsonResponse([{ translations: [{ text: 'translated' }] }]),
+    ]);
+
+    await translateText('test', 'auto', 'zh-Hans', fetchFn);
+
+    const url = fetchFn.calls[1].url;
+    expect(url).toContain('api-version=3.0');
+    expect(url).toContain('to=zh-Hans');
+    expect(url).not.toContain('from=');
+  });
+
   it('throws on translate API failure', async () => {
     const fetchFn = mockFetch([
       okTextResponse('token'),
