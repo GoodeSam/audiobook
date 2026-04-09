@@ -29,7 +29,6 @@ const $ = (id) => document.getElementById(id);
 const uploadScreen = $('upload-screen');
 const readerScreen = $('reader-screen');
 const dropZone = $('drop-zone');
-const fileInput = $('file-input');
 const btnBack = $('btn-back');
 const bookTitleEl = $('book-title');
 const voiceEnSelect = $('voice-en-select');
@@ -62,6 +61,30 @@ const btnCancel = $('btn-cancel');
 
 // ── Upload handling ──
 
+const DROP_ZONE_DEFAULT = `
+  <div class="drop-icon">📖</div>
+  <p>Drag & drop an EPUB file here</p>
+  <p class="or">or</p>
+  <label class="file-btn">Choose File<input type="file" accept=".epub" hidden></label>
+`;
+
+function resetDropZone(errorMsg) {
+  if (errorMsg) {
+    dropZone.innerHTML = `
+      <div class="drop-icon">📖</div>
+      <p style="color: var(--danger)">Error: ${errorMsg}</p>
+      <p class="or">Try another file</p>
+      <label class="file-btn">Choose File<input type="file" accept=".epub" hidden></label>
+    `;
+  } else {
+    dropZone.innerHTML = DROP_ZONE_DEFAULT;
+  }
+}
+
+function getFileInput() {
+  return dropZone.querySelector('input[type="file"]');
+}
+
 dropZone.addEventListener('dragover', (e) => {
   e.preventDefault();
   dropZone.classList.add('drag-over');
@@ -73,11 +96,16 @@ dropZone.addEventListener('drop', (e) => {
   const file = e.dataTransfer.files[0];
   if (file?.name.endsWith('.epub')) handleFile(file);
 });
-fileInput.addEventListener('change', () => {
-  if (fileInput.files[0]) handleFile(fileInput.files[0]);
+
+// Use event delegation so it works after innerHTML replacements
+dropZone.addEventListener('change', (e) => {
+  if (e.target.type === 'file' && e.target.files[0]) handleFile(e.target.files[0]);
 });
 dropZone.addEventListener('click', (e) => {
-  if (e.target.tagName !== 'INPUT') fileInput.click();
+  if (e.target.tagName !== 'INPUT') {
+    const input = getFileInput();
+    if (input) input.click();
+  }
 });
 
 async function handleFile(file) {
@@ -94,16 +122,12 @@ async function handleFile(file) {
     state.audioBlobs = {};
     state.activeChapter = null;
     state.selectedChapters = new Set();
+
+    // Restore drop zone before switching screens so it's ready if user comes back
+    resetDropZone();
     showReaderScreen();
   } catch (err) {
-    dropZone.innerHTML = `
-      <div class="drop-icon">📖</div>
-      <p style="color: var(--danger)">Error: ${err.message}</p>
-      <p class="or">Try another file</p>
-      <label class="file-btn">Choose File<input type="file" accept=".epub" hidden></label>
-    `;
-    const newInput = dropZone.querySelector('input[type="file"]');
-    if (newInput) newInput.addEventListener('change', () => { if (newInput.files[0]) handleFile(newInput.files[0]); });
+    resetDropZone(err.message);
   }
 }
 
@@ -120,14 +144,7 @@ function showReaderScreen() {
 btnBack.addEventListener('click', () => {
   readerScreen.classList.remove('active');
   uploadScreen.classList.add('active');
-  dropZone.innerHTML = `
-    <div class="drop-icon">📖</div>
-    <p>Drag & drop an EPUB file here</p>
-    <p class="or">or</p>
-    <label class="file-btn">Choose File<input type="file" accept=".epub" hidden></label>
-  `;
-  const newInput = dropZone.querySelector('input[type="file"]');
-  if (newInput) newInput.addEventListener('change', () => { if (newInput.files[0]) handleFile(newInput.files[0]); });
+  resetDropZone();
 });
 
 // ── Speed controls ──
