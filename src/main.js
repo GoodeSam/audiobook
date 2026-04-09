@@ -10,7 +10,7 @@ import { generateChapterAudio, cancelGeneration } from './edge-tts.js';
 import { translateChapter, cancelTranslation, resetTranslationState } from './ms-translator.js';
 import { sanitizeFilename, exportMultipleChapters } from './chapter-export.js';
 import { ProgressTracker } from './progress-tracker.js';
-import { createAppState, resetStateForNewBook } from './app-state.js';
+import { createAppState, resetStateForNewBook, resetStateOnError } from './app-state.js';
 
 // ── State ──
 
@@ -111,7 +111,15 @@ dropZone.addEventListener('click', (e) => {
 });
 
 async function handleFile(file) {
+  if (state.working) return; // Prevent concurrent uploads
+  state.working = true;
+
   try {
+    // Cancel any in-flight operations from a previous session
+    cancelGeneration();
+    cancelTranslation();
+    hideProgress();
+
     dropZone.innerHTML = '<p>Parsing EPUB...</p>';
     const book = await parseEPUB(file);
 
@@ -120,13 +128,14 @@ async function handleFile(file) {
       ch.translatedMarkdown = null;
     }
 
-    // Reset all state flags (including generating) to prevent stale locks
+    // Reset all state flags (including generating and working)
     resetStateForNewBook(state, book);
 
     // Restore drop zone before switching screens so it's ready if user comes back
     resetDropZone();
     showReaderScreen();
   } catch (err) {
+    resetStateOnError(state);
     resetDropZone(err.message);
   }
 }
