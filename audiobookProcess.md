@@ -1,3 +1,11 @@
+Append the final report (do not overwrite) to the end of the currently open Markdown file（/Users/victor/projects/audiobook/[audiobookProcess.md](http://audiobookProcess.md)）.
+
+
+
+/Users/victor/projects/audiobook/[audiobookProcess.md](http://audiobookProcess.md)
+
+
+
 \>> 将本文件的内容上传到 git remote add origin [git\@github.com](mailto:git@github.com):GoodeSam/audiobook.git
 
 git branch -M main
@@ -8,7 +16,9 @@ git push -u origin main
 
 
 
-\>> 借鉴 /Users/victor/projects/EasyOriginals 和 /Users/victor/projects/tepub的内容，制作
+\>> 借鉴 /Users/victor/projects/EasyOriginals 和 /Users/victor/projects/tepub的内容，制作一个gitpage，当我上传一个epub书籍时，他可以把这个书籍extract成多个markdown文件，并对每一个markdown组成文件利用Edge TTS转换成mp3。 Build a gitpage that extracts uploaded EPUB books into multiple markdown files and converts each markdown file to mp3 using Edge TTS. Reference /Users/victor/projects/EasyOriginals and /Users/victor/projects/tepub for implementation patterns.
+
+
 
 \>> 使用TDD实现：
 

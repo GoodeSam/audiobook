@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EPUB to Audiobook</title>
+  <link rel="stylesheet" href="/src/app.css">
+</head>
+<body>
+  <!-- Upload Screen -->
+  <div id="upload-screen" class="screen active">
+    <div class="upload-container">
+      <h1>EPUB to Audiobook</h1>
+      <p class="subtitle">Upload an EPUB book to extract chapters as Markdown and convert to MP3</p>
+      <div id="drop-zone" class="drop-zone">
+        <div class="drop-icon">📖</div>
+        <p>Drag & drop an EPUB file here</p>
+        <p class="or">or</p>
+        <label class="file-btn">
+          Choose File
+          <input type="file" id="file-input" accept=".epub" hidden>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reader Screen -->
+  <div id="reader-screen" class="screen">
+    <header class="toolbar">
+      <button id="btn-back" class="tool-btn" title="Back to upload">← Back</button>
+      <h2 id="book-title" class="book-title">Book Title</h2>
+      <div class="toolbar-actions">
+        <select id="voice-select" title="TTS Voice">
+          <optgroup label="English (US)">
+            <option value="en-US-AriaNeural">Aria (Female)</option>
+            <option value="en-US-GuyNeural">Guy (Male)</option>
+            <option value="en-US-JennyNeural">Jenny (Female)</option>
+            <option value="en-US-ChristopherNeural">Christopher (Male)</option>
+          </optgroup>
+          <optgroup label="English (UK)">
+            <option value="en-GB-SoniaNeural">Sonia (Female)</option>
+            <option value="en-GB-RyanNeural">Ryan (Male)</option>
+          </optgroup>
+          <optgroup label="Chinese (Mandarin)">
+            <option value="zh-CN-XiaoxiaoNeural">Xiaoxiao (Female)</option>
+            <option value="zh-CN-YunxiNeural">Yunxi (Male)</option>
+          </optgroup>
+          <optgroup label="Spanish">
+            <option value="es-ES-ElviraNeural">Elvira (Female)</option>
+            <option value="es-ES-AlvaroNeural">Alvaro (Male)</option>
+          </optgroup>
+          <optgroup label="French">
+            <option value="fr-FR-DeniseNeural">Denise (Female)</option>
+            <option value="fr-FR-HenriNeural">Henri (Male)</option>
+          </optgroup>
+          <optgroup label="German">
+            <option value="de-DE-KatjaNeural">Katja (Female)</option>
+            <option value="de-DE-ConradNeural">Conrad (Male)</option>
+          </optgroup>
+          <optgroup label="Japanese">
+            <option value="ja-JP-NanamiNeural">Nanami (Female)</option>
+            <option value="ja-JP-KeitaNeural">Keita (Male)</option>
+          </optgroup>
+        </select>
+        <label class="speed-control" title="Speech rate">
+          Speed:
+          <input type="range" id="speed-range" min="-50" max="100" value="0" step="10">
+          <span id="speed-label">0%</span>
+        </label>
+      </div>
+    </header>
+
+    <div class="main-content">
+      <!-- Chapter List Sidebar -->
+      <aside id="chapter-sidebar" class="sidebar">
+        <div class="sidebar-header">
+          <h3>Chapters</h3>
+          <button id="btn-generate-all" class="action-btn" title="Generate all chapter MP3s">Generate All MP3s</button>
+          <button id="btn-download-all" class="action-btn" title="Download all MP3s as ZIP" disabled>Download All ZIP</button>
+        </div>
+        <ul id="chapter-list" class="chapter-list"></ul>
+      </aside>
+
+      <!-- Chapter Content -->
+      <main id="chapter-content" class="content-area">
+        <div id="content-placeholder" class="placeholder">
+          <p>Select a chapter from the sidebar to view its content</p>
+        </div>
+        <div id="chapter-view" class="chapter-view" hidden>
+          <div class="chapter-header">
+            <h2 id="chapter-title"></h2>
+            <div class="chapter-actions">
+              <button id="btn-generate-chapter" class="action-btn">Generate MP3</button>
+              <button id="btn-download-chapter" class="action-btn" disabled>Download MP3</button>
+              <button id="btn-download-md" class="action-btn">Download MD</button>
+            </div>
+          </div>
+          <div id="chapter-markdown" class="markdown-content"></div>
+        </div>
+      </main>
+    </div>
+
+    <!-- Progress Overlay -->
+    <div id="progress-overlay" class="progress-overlay" hidden>
+      <div class="progress-card">
+        <h3 id="progress-title">Generating Audio...</h3>
+        <div class="progress-bar-container">
+          <div id="progress-bar" class="progress-bar"></div>
+        </div>
+        <p id="progress-text">0 / 0 paragraphs</p>
+        <button id="btn-cancel" class="action-btn cancel-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
