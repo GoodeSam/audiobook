@@ -1,61 +1,77 @@
 /**
  * EPUB to Audiobook - Main application.
  *
- * Orchestrates the upload, parsing, markdown conversion, and TTS pipeline.
+ * Orchestrates upload, parsing, markdown conversion, translation, and TTS.
  */
 
 import { parseEPUB } from './epub-parser.js';
 import { htmlToMarkdown, cleanMarkdown } from './html-to-markdown.js';
 import { generateChapterAudio, cancelGeneration } from './edge-tts.js';
+import { translateChapter, cancelTranslation, resetTranslationState } from './ms-translator.js';
+import { sanitizeFilename, exportMultipleChapters } from './chapter-export.js';
+import { ProgressTracker } from './progress-tracker.js';
 
-// State
+// ── State ──
+
 const state = {
-  book: null,           // { title, chapters: [{title, html, markdown}] }
-  audioBlobs: {},       // chapterIndex -> Blob
-  activeChapter: null,  // currently displayed chapter index
+  book: null,                // { title, chapters: [{title, html, markdown, translatedMarkdown?}] }
+  audioBlobs: {},            // chapterIndex -> Blob
+  activeChapter: null,       // currently displayed chapter index
+  activeTab: 'original',    // 'original' | 'translated'
   generating: false,
+  selectedChapters: new Set(),
 };
 
-// DOM elements
-const uploadScreen = document.getElementById('upload-screen');
-const readerScreen = document.getElementById('reader-screen');
-const dropZone = document.getElementById('drop-zone');
-const fileInput = document.getElementById('file-input');
-const btnBack = document.getElementById('btn-back');
-const bookTitleEl = document.getElementById('book-title');
-const voiceSelect = document.getElementById('voice-select');
-const speedRange = document.getElementById('speed-range');
-const speedLabel = document.getElementById('speed-label');
-const chapterList = document.getElementById('chapter-list');
-const contentPlaceholder = document.getElementById('content-placeholder');
-const chapterView = document.getElementById('chapter-view');
-const chapterTitle = document.getElementById('chapter-title');
-const chapterMarkdown = document.getElementById('chapter-markdown');
-const btnGenerateChapter = document.getElementById('btn-generate-chapter');
-const btnDownloadChapter = document.getElementById('btn-download-chapter');
-const btnDownloadMd = document.getElementById('btn-download-md');
-const btnGenerateAll = document.getElementById('btn-generate-all');
-const btnDownloadAll = document.getElementById('btn-download-all');
-const progressOverlay = document.getElementById('progress-overlay');
-const progressTitle = document.getElementById('progress-title');
-const progressBar = document.getElementById('progress-bar');
-const progressText = document.getElementById('progress-text');
-const btnCancel = document.getElementById('btn-cancel');
+// ── DOM elements ──
 
-// --- Upload handling ---
+const $ = (id) => document.getElementById(id);
+
+const uploadScreen = $('upload-screen');
+const readerScreen = $('reader-screen');
+const dropZone = $('drop-zone');
+const fileInput = $('file-input');
+const btnBack = $('btn-back');
+const bookTitleEl = $('book-title');
+const voiceEnSelect = $('voice-en-select');
+const voiceZhSelect = $('voice-zh-select');
+const speedEnRange = $('speed-en-range');
+const speedZhRange = $('speed-zh-range');
+const speedEnLabel = $('speed-en-label');
+const speedZhLabel = $('speed-zh-label');
+const audioModeSelect = $('audio-mode-select');
+const translateLangSelect = $('translate-lang-select');
+const chapterList = $('chapter-list');
+const contentPlaceholder = $('content-placeholder');
+const chapterView = $('chapter-view');
+const chapterTitle = $('chapter-title');
+const chapterMarkdown = $('chapter-markdown');
+const btnTranslateChapter = $('btn-translate-chapter');
+const btnGenerateChapter = $('btn-generate-chapter');
+const btnDownloadChapter = $('btn-download-chapter');
+const btnDownloadMd = $('btn-download-md');
+const btnSelectAll = $('btn-select-all');
+const btnTranslateSelected = $('btn-translate-selected');
+const btnGenerateSelected = $('btn-generate-selected');
+const btnExportSelected = $('btn-export-selected');
+const btnDownloadAll = $('btn-download-all');
+const progressOverlay = $('progress-overlay');
+const progressTitle = $('progress-title');
+const progressBar = $('progress-bar');
+const progressText = $('progress-text');
+const btnCancel = $('btn-cancel');
+
+// ── Upload handling ──
 
 dropZone.addEventListener('dragover', (e) => {
   e.preventDefault();
   dropZone.classList.add('drag-over');
 });
-dropZone.addEventListener('dragleave', () => {
-  dropZone.classList.remove('drag-over');
-});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
 dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
   dropZone.classList.remove('drag-over');
   const file = e.dataTransfer.files[0];
-  if (file && file.name.endsWith('.epub')) handleFile(file);
+  if (file?.name.endsWith('.epub')) handleFile(file);
 });
 fileInput.addEventListener('change', () => {
   if (fileInput.files[0]) handleFile(fileInput.files[0]);
@@ -69,30 +85,29 @@ async function handleFile(file) {
     dropZone.innerHTML = '<p>Parsing EPUB...</p>';
     const book = await parseEPUB(file);
 
-    // Convert each chapter's HTML to markdown
     for (const ch of book.chapters) {
-      const raw = htmlToMarkdown(ch.html);
-      ch.markdown = cleanMarkdown(raw);
+      ch.markdown = cleanMarkdown(htmlToMarkdown(ch.html));
+      ch.translatedMarkdown = null;
     }
 
     state.book = book;
     state.audioBlobs = {};
     state.activeChapter = null;
+    state.selectedChapters = new Set();
     showReaderScreen();
   } catch (err) {
     dropZone.innerHTML = `
       <div class="drop-icon">📖</div>
       <p style="color: var(--danger)">Error: ${err.message}</p>
       <p class="or">Try another file</p>
-      <label class="file-btn">Choose File<input type="file" id="file-input" accept=".epub" hidden></label>
+      <label class="file-btn">Choose File<input type="file" accept=".epub" hidden></label>
     `;
-    // Re-bind the new file input
     const newInput = dropZone.querySelector('input[type="file"]');
     if (newInput) newInput.addEventListener('change', () => { if (newInput.files[0]) handleFile(newInput.files[0]); });
   }
 }
 
-// --- Screen navigation ---
+// ── Screen navigation ──
 
 function showReaderScreen() {
   uploadScreen.classList.remove('active');
@@ -105,7 +120,6 @@ function showReaderScreen() {
 btnBack.addEventListener('click', () => {
   readerScreen.classList.remove('active');
   uploadScreen.classList.add('active');
-  // Reset drop zone
   dropZone.innerHTML = `
     <div class="drop-icon">📖</div>
     <p>Drag & drop an EPUB file here</p>
@@ -116,14 +130,18 @@ btnBack.addEventListener('click', () => {
   if (newInput) newInput.addEventListener('change', () => { if (newInput.files[0]) handleFile(newInput.files[0]); });
 });
 
-// --- Speed control ---
+// ── Speed controls ──
 
-speedRange.addEventListener('input', () => {
-  const val = speedRange.value;
-  speedLabel.textContent = `${val >= 0 ? '+' : ''}${val}%`;
+speedEnRange.addEventListener('input', () => {
+  const v = speedEnRange.value;
+  speedEnLabel.textContent = `${v >= 0 ? '+' : ''}${v}%`;
+});
+speedZhRange.addEventListener('input', () => {
+  const v = speedZhRange.value;
+  speedZhLabel.textContent = `${v >= 0 ? '+' : ''}${v}%`;
 });
 
-// --- Chapter list ---
+// ── Chapter list ──
 
 function renderChapterList() {
   chapterList.innerHTML = '';
@@ -131,41 +149,55 @@ function renderChapterList() {
     const li = document.createElement('li');
     li.className = 'chapter-item';
     li.dataset.index = idx;
+    if (idx === state.activeChapter) li.classList.add('active');
 
-    const icon = document.createElement('span');
-    icon.className = 'status-icon';
-    icon.textContent = state.audioBlobs[idx] ? '🔊' : '📄';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = state.selectedChapters.has(idx);
+    cb.addEventListener('change', (e) => {
+      e.stopPropagation();
+      if (cb.checked) state.selectedChapters.add(idx);
+      else state.selectedChapters.delete(idx);
+    });
+
+    const icons = document.createElement('span');
+    icons.className = 'status-icons';
+    if (ch.translatedMarkdown) icons.innerHTML += '<span class="status-icon" title="Translated">🌐</span>';
+    if (state.audioBlobs[idx]) icons.innerHTML += '<span class="status-icon" title="Audio ready">🔊</span>';
+    if (!ch.translatedMarkdown && !state.audioBlobs[idx]) icons.innerHTML = '<span class="status-icon">📄</span>';
 
     const name = document.createElement('span');
     name.className = 'chapter-name';
     name.textContent = ch.title;
     name.title = ch.title;
 
-    li.appendChild(icon);
+    li.appendChild(cb);
+    li.appendChild(icons);
     li.appendChild(name);
-
-    li.addEventListener('click', () => selectChapter(idx));
+    li.addEventListener('click', (e) => {
+      if (e.target.tagName !== 'INPUT') selectChapter(idx);
+    });
     chapterList.appendChild(li);
   });
-  updateDownloadAllButton();
+  updateBulkButtons();
 }
 
 function selectChapter(idx) {
   state.activeChapter = idx;
   const ch = state.book.chapters[idx];
 
-  // Update active state in sidebar
   for (const item of chapterList.children) {
     item.classList.toggle('active', parseInt(item.dataset.index) === idx);
   }
 
-  // Show chapter content
   contentPlaceholder.hidden = true;
   chapterView.hidden = false;
   chapterTitle.textContent = ch.title;
-  chapterMarkdown.innerHTML = renderMarkdownHtml(ch.markdown);
 
-  // Update button states
+  // Update tabs
+  updateTabs();
+  showTab(state.activeTab);
+
   btnDownloadChapter.disabled = !state.audioBlobs[idx];
 }
 
@@ -174,59 +206,180 @@ function showPlaceholder() {
   chapterView.hidden = true;
 }
 
-/**
- * Simple markdown to HTML renderer for display.
- */
-function renderMarkdownHtml(md) {
-  let html = md
-    // Code blocks (must come before other rules)
-    .replace(/```([^`]*?)```/gs, '<pre><code>$1</code></pre>')
-    // Headings
-    .replace(/^######\s+(.+)$/gm, '<h6>$1</h6>')
-    .replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>')
-    .replace(/^####\s+(.+)$/gm, '<h4>$1</h4>')
-    .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
-    .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
-    .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
-    // Bold and italic
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    // Inline code
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    // Images
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')
-    // Links
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-    // Horizontal rules
-    .replace(/^---+$/gm, '<hr>')
-    // Blockquotes
-    .replace(/^>\s+(.+)$/gm, '<blockquote>$1</blockquote>')
-    // Paragraphs (double newlines)
-    .replace(/\n\n+/g, '</p><p>')
-    // Single newlines within paragraphs
-    .replace(/\n/g, '<br>');
+// ── Tabs ──
 
-  return `<p>${html}</p>`;
+function updateTabs() {
+  const ch = state.book.chapters[state.activeChapter];
+  const translatedTab = document.querySelector('.tab-btn[data-tab="translated"]');
+  translatedTab.classList.toggle('has-content', !!ch?.translatedMarkdown);
 }
 
-// --- Generate single chapter ---
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    state.activeTab = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+    showTab(btn.dataset.tab);
+  });
+});
+
+function showTab(tab) {
+  const ch = state.book.chapters[state.activeChapter];
+  if (!ch) return;
+
+  if (tab === 'translated' && ch.translatedMarkdown) {
+    chapterMarkdown.innerHTML = renderMarkdownHtml(ch.translatedMarkdown);
+  } else if (tab === 'translated') {
+    chapterMarkdown.innerHTML = '<p style="color: var(--muted)">Not yet translated. Click "Translate" to translate this chapter.</p>';
+  } else {
+    chapterMarkdown.innerHTML = renderMarkdownHtml(ch.markdown);
+  }
+}
+
+// ── Select All ──
+
+btnSelectAll.addEventListener('click', () => {
+  const allSelected = state.selectedChapters.size === state.book.chapters.length;
+  state.selectedChapters = allSelected ? new Set() : new Set(state.book.chapters.map((_, i) => i));
+  renderChapterList();
+});
+
+// ── Translation ──
+
+btnTranslateChapter.addEventListener('click', async () => {
+  if (state.activeChapter === null || state.generating) return;
+  await translateSingleChapter(state.activeChapter);
+});
+
+btnTranslateSelected.addEventListener('click', async () => {
+  if (state.generating || state.selectedChapters.size === 0) return;
+  await translateMultipleChapters([...state.selectedChapters].sort((a, b) => a - b));
+});
+
+async function translateSingleChapter(idx) {
+  const ch = state.book.chapters[idx];
+  const toLang = translateLangSelect.value;
+  const fromLang = detectSourceLang(toLang);
+  state.generating = true;
+  showProgress('Translating: ' + ch.title);
+
+  try {
+    resetTranslationState();
+    const translated = await translateChapter(ch.markdown, fromLang, toLang, {
+      onProgress: (current, total) => updateProgress(current, total, `Translating: ${current} / ${total} paragraphs`),
+    });
+    ch.translatedMarkdown = translated;
+    renderChapterList();
+    updateTabs();
+    showTab(state.activeTab);
+  } catch (err) {
+    if (!err.message.includes('cancelled')) {
+      alert('Translation error: ' + err.message);
+    }
+  } finally {
+    state.generating = false;
+    hideProgress();
+  }
+}
+
+async function translateMultipleChapters(indices) {
+  state.generating = true;
+  const toLang = translateLangSelect.value;
+  const fromLang = detectSourceLang(toLang);
+  const total = indices.length;
+
+  showProgress('Translating chapters...');
+
+  try {
+    for (let i = 0; i < indices.length; i++) {
+      const idx = indices[i];
+      const ch = state.book.chapters[idx];
+
+      if (ch.translatedMarkdown) {
+        updateProgress(i + 1, total, `Chapter ${i + 1}/${total} (cached)`);
+        continue;
+      }
+
+      progressTitle.textContent = `Translating ${i + 1}/${total}: ${ch.title}`;
+      resetTranslationState();
+
+      const translated = await translateChapter(ch.markdown, fromLang, toLang, {
+        onProgress: (current, paraTotal) => {
+          const chapterPct = current / paraTotal;
+          const overallPct = ((i + chapterPct) / total) * 100;
+          progressBar.style.width = `${overallPct}%`;
+          progressText.textContent = `Chapter ${i + 1}/${total} — Paragraph ${current}/${paraTotal}`;
+        },
+      });
+
+      ch.translatedMarkdown = translated;
+      renderChapterList();
+    }
+  } catch (err) {
+    if (!err.message.includes('cancelled')) {
+      alert('Translation error: ' + err.message);
+    }
+  } finally {
+    state.generating = false;
+    hideProgress();
+    if (state.activeChapter !== null) {
+      updateTabs();
+      showTab(state.activeTab);
+    }
+  }
+}
+
+function detectSourceLang(targetLang) {
+  // If translating to Chinese, source is English and vice versa
+  if (targetLang.startsWith('zh')) return 'en';
+  return 'en'; // Default source is English; Microsoft auto-detects anyway
+}
+
+// ── Audio generation ──
 
 btnGenerateChapter.addEventListener('click', async () => {
   if (state.activeChapter === null || state.generating) return;
   await generateSingleChapter(state.activeChapter);
 });
 
+btnGenerateSelected.addEventListener('click', async () => {
+  if (state.generating || state.selectedChapters.size === 0) return;
+  await generateMultipleChapters([...state.selectedChapters].sort((a, b) => a - b));
+});
+
 async function generateSingleChapter(idx) {
   const ch = state.book.chapters[idx];
+  const mode = audioModeSelect.value;
+
+  // Check if translation is needed
+  if ((mode === 'translated' || mode === 'bilingual') && !ch.translatedMarkdown) {
+    await translateSingleChapter(idx);
+    if (!ch.translatedMarkdown) return; // Translation failed or cancelled
+  }
+
   state.generating = true;
-  showProgress(`Generating: ${ch.title}`);
+  const tracker = new ProgressTracker([{ name: 'generating', weight: 1.0 }]);
+  tracker.onProgress((s) => {
+    progressBar.style.width = `${s.overallPercent}%`;
+    progressText.textContent = s.phase === 'generating'
+      ? `Generating: ${s.current} / ${s.total} segments`
+      : tracker.statusText;
+  });
+
+  showProgress('Generating: ' + ch.title);
 
   try {
-    const blob = await generateChapterAudio(ch.markdown, {
-      voice: voiceSelect.value,
-      speechRate: parseInt(speedRange.value),
+    tracker.startPhase('generating', 1); // Will be updated inside generateChapterAudio
+    const blob = await generateChapterAudio({
+      originalText: ch.markdown,
+      translatedText: ch.translatedMarkdown,
+      audioMode: mode,
+      voiceEn: voiceEnSelect.value,
+      voiceZh: voiceZhSelect.value,
+      speechRateEn: parseInt(speedEnRange.value),
+      speechRateZh: parseInt(speedZhRange.value),
       onProgress: (current, total) => {
-        updateProgress(current, total);
+        tracker.startPhase('generating', total);
+        tracker.advance(current);
       },
     });
 
@@ -234,8 +387,8 @@ async function generateSingleChapter(idx) {
     renderChapterList();
     selectChapter(idx);
   } catch (err) {
-    if (err.message !== 'Audio generation cancelled') {
-      alert(`Error generating audio: ${err.message}`);
+    if (!err.message.includes('cancelled')) {
+      alert('Error generating audio: ' + err.message);
     }
   } finally {
     state.generating = false;
@@ -243,53 +396,88 @@ async function generateSingleChapter(idx) {
   }
 }
 
-// --- Generate all chapters ---
-
-btnGenerateAll.addEventListener('click', async () => {
-  if (state.generating) return;
+async function generateMultipleChapters(indices) {
   state.generating = true;
+  const mode = audioModeSelect.value;
+  const total = indices.length;
+  const needsTranslation = mode === 'translated' || mode === 'bilingual';
 
-  const total = state.book.chapters.length;
-  showProgress('Generating All Chapters...');
+  showProgress('Generating chapters...');
 
   try {
-    for (let i = 0; i < total; i++) {
-      if (state.audioBlobs[i]) {
-        // Already generated
-        updateProgress(i + 1, total, `Chapter ${i + 1}/${total} (cached)`);
+    // Phase 1: Translate any that need it
+    if (needsTranslation) {
+      const toTranslate = indices.filter(i => !state.book.chapters[i].translatedMarkdown);
+      if (toTranslate.length > 0) {
+        progressTitle.textContent = 'Translating chapters...';
+        const toLang = translateLangSelect.value;
+        const fromLang = detectSourceLang(toLang);
+
+        for (let i = 0; i < toTranslate.length; i++) {
+          const idx = toTranslate[i];
+          const ch = state.book.chapters[idx];
+          progressTitle.textContent = `Translating ${i + 1}/${toTranslate.length}: ${ch.title}`;
+          resetTranslationState();
+
+          const translated = await translateChapter(ch.markdown, fromLang, toLang, {
+            onProgress: (current, paraTotal) => {
+              const pct = ((i + current / paraTotal) / toTranslate.length) * 30; // 30% of total
+              progressBar.style.width = `${pct}%`;
+              progressText.textContent = `Translating ${i + 1}/${toTranslate.length}: paragraph ${current}/${paraTotal}`;
+            },
+          });
+          ch.translatedMarkdown = translated;
+          renderChapterList();
+        }
+      }
+    }
+
+    // Phase 2: Generate audio
+    for (let i = 0; i < indices.length; i++) {
+      const idx = indices[i];
+      const ch = state.book.chapters[idx];
+
+      if (state.audioBlobs[idx]) {
+        const pct = 30 + ((i + 1) / total) * 70;
+        progressBar.style.width = `${pct}%`;
+        progressText.textContent = `Chapter ${i + 1}/${total} (cached)`;
         continue;
       }
 
-      const ch = state.book.chapters[i];
-      progressTitle.textContent = `Chapter ${i + 1}/${total}: ${ch.title}`;
+      progressTitle.textContent = `Generating ${i + 1}/${total}: ${ch.title}`;
 
-      const blob = await generateChapterAudio(ch.markdown, {
-        voice: voiceSelect.value,
-        speechRate: parseInt(speedRange.value),
-        onProgress: (current, paraTotal) => {
-          const chapterProgress = current / paraTotal;
-          const overallProgress = (i + chapterProgress) / total;
-          progressBar.style.width = `${overallProgress * 100}%`;
-          progressText.textContent = `Chapter ${i + 1}/${total} — Paragraph ${current}/${paraTotal}`;
+      const blob = await generateChapterAudio({
+        originalText: ch.markdown,
+        translatedText: ch.translatedMarkdown,
+        audioMode: mode,
+        voiceEn: voiceEnSelect.value,
+        voiceZh: voiceZhSelect.value,
+        speechRateEn: parseInt(speedEnRange.value),
+        speechRateZh: parseInt(speedZhRange.value),
+        onProgress: (current, segTotal) => {
+          const chapterPct = current / segTotal;
+          const overallPct = 30 + ((i + chapterPct) / total) * 70;
+          progressBar.style.width = `${overallPct}%`;
+          progressText.textContent = `Chapter ${i + 1}/${total} — Segment ${current}/${segTotal}`;
         },
       });
 
-      state.audioBlobs[i] = blob;
+      state.audioBlobs[idx] = blob;
       renderChapterList();
     }
 
-    updateDownloadAllButton();
+    updateBulkButtons();
   } catch (err) {
-    if (err.message !== 'Audio generation cancelled') {
-      alert(`Error generating audio: ${err.message}`);
+    if (!err.message.includes('cancelled')) {
+      alert('Error: ' + err.message);
     }
   } finally {
     state.generating = false;
     hideProgress();
   }
-});
+}
 
-// --- Download handlers ---
+// ── Download handlers ──
 
 btnDownloadChapter.addEventListener('click', () => {
   if (state.activeChapter === null) return;
@@ -306,33 +494,50 @@ btnDownloadMd.addEventListener('click', () => {
   downloadBlob(blob, `${sanitizeFilename(ch.title)}.md`);
 });
 
-btnDownloadAll.addEventListener('click', async () => {
-  const chapters = state.book.chapters;
-  const blobs = state.audioBlobs;
+btnExportSelected.addEventListener('click', async () => {
+  const indices = [...state.selectedChapters].sort((a, b) => a - b);
+  if (indices.length === 0) return;
 
-  // Check if we have all chapters
-  const generated = Object.keys(blobs).length;
-  if (generated === 0) return;
+  const hasTranslations = indices.some(i => state.book.chapters[i].translatedMarkdown);
+  const files = exportMultipleChapters(state.book.chapters, indices, { includeTranslation: hasTranslations });
 
-  // Use JSZip to create a ZIP file
+  if (files.length === 1) {
+    const blob = new Blob([files[0].content], { type: 'text/markdown' });
+    downloadBlob(blob, files[0].filename);
+    return;
+  }
+
+  // Multiple files -> ZIP
   const JSZip = (await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm')).default;
   const zip = new JSZip();
+  for (const f of files) zip.file(f.filename, f.content);
+  const zipBlob = await zip.generateAsync({ type: 'blob' });
+  downloadBlob(zipBlob, `${sanitizeFilename(state.book.title)}_chapters.zip`);
+});
+
+btnDownloadAll.addEventListener('click', async () => {
+  const blobs = state.audioBlobs;
+  if (Object.keys(blobs).length === 0) return;
+
+  const JSZip = (await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm')).default;
+  const zip = new JSZip();
+  const chapters = state.book.chapters;
 
   for (let i = 0; i < chapters.length; i++) {
-    if (blobs[i]) {
-      const filename = `${String(i + 1).padStart(3, '0')}_${sanitizeFilename(chapters[i].title)}.mp3`;
-      zip.file(filename, blobs[i]);
+    const prefix = String(i + 1).padStart(3, '0');
+    const safeName = sanitizeFilename(chapters[i].title);
+    if (blobs[i]) zip.file(`${prefix}_${safeName}.mp3`, blobs[i]);
+    zip.file(`${prefix}_${safeName}.md`, chapters[i].markdown);
+    if (chapters[i].translatedMarkdown) {
+      zip.file(`${prefix}_${safeName}_translated.md`, chapters[i].translatedMarkdown);
     }
-    // Also include markdown files
-    const mdFilename = `${String(i + 1).padStart(3, '0')}_${sanitizeFilename(chapters[i].title)}.md`;
-    zip.file(mdFilename, chapters[i].markdown);
   }
 
   const zipBlob = await zip.generateAsync({ type: 'blob' });
   downloadBlob(zipBlob, `${sanitizeFilename(state.book.title)}.zip`);
 });
 
-// --- Progress UI ---
+// ── Progress UI ──
 
 function showProgress(title) {
   progressTitle.textContent = title;
@@ -344,7 +549,7 @@ function showProgress(title) {
 function updateProgress(current, total, text) {
   const pct = total > 0 ? (current / total) * 100 : 0;
   progressBar.style.width = `${pct}%`;
-  progressText.textContent = text || `${current} / ${total} paragraphs`;
+  progressText.textContent = text || `${current} / ${total}`;
 }
 
 function hideProgress() {
@@ -353,13 +558,14 @@ function hideProgress() {
 
 btnCancel.addEventListener('click', () => {
   cancelGeneration();
+  cancelTranslation();
 });
 
-// --- Utilities ---
+// ── Utilities ──
 
-function updateDownloadAllButton() {
-  const generated = Object.keys(state.audioBlobs).length;
-  btnDownloadAll.disabled = generated === 0;
+function updateBulkButtons() {
+  const hasAudio = Object.keys(state.audioBlobs).length > 0;
+  btnDownloadAll.disabled = !hasAudio;
 }
 
 function downloadBlob(blob, filename) {
@@ -373,10 +579,27 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
-function sanitizeFilename(name) {
-  return name
-    .replace(/[<>:"/\\|?*!]/g, '')
-    .replace(/\s+/g, '-')
-    .substring(0, 50)
-    .replace(/-+$/, '') || 'untitled';
+/**
+ * Simple markdown to HTML renderer for display.
+ */
+function renderMarkdownHtml(md) {
+  let html = md
+    .replace(/```([^`]*?)```/gs, '<pre><code>$1</code></pre>')
+    .replace(/^######\s+(.+)$/gm, '<h6>$1</h6>')
+    .replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>')
+    .replace(/^####\s+(.+)$/gm, '<h4>$1</h4>')
+    .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
+    .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
+    .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/^---+$/gm, '<hr>')
+    .replace(/^>\s+(.+)$/gm, '<blockquote>$1</blockquote>')
+    .replace(/\n\n+/g, '</p><p>')
+    .replace(/\n/g, '<br>');
+
+  return `<p>${html}</p>`;
 }

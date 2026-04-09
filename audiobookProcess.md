@@ -20,7 +20,24 @@ git push -u origin main
 
 
 
-\>> 使用TDD实现：
+```javascript
+⏺ Pushed. The GitHub Actions workflow will build and
+  deploy to GitHub Pages automatically. Once it      
+  completes, the site will be live at                
+  https://GoodeSam.github.io/audiobook/.           
+                                                     
+  You'll need to enable GitHub Pages in the repo     
+  settings (Settings > Pages > Source: GitHub        
+  Actions) if it's not already configured.
+```
+
+
+
+\>> 使用TDD实现：上传书籍直audiobook的界面后，可以选择对某个或多个章节进行提取至markdown，也可以选择免费的microsoft进行翻译，还可以对某个或多个章节的翻译的全原文，译文，原文和译文的混合体进行转语音，语音角色有多个选项，且可以分别设置中英文音频的速度。过程要显示具体的进度。 Implement using TDD: In the audiobook interface, add functionality to extract one or multiple chapters to markdown, translate using Microsoft's free translation service, and convert chapters (in original text, translated, or mixed form) to speech with multiple voice role options and separate speed controls for Chinese and English audio. Display progress throughout the process.
+
+
+
+
 
 \>> 使用TDD实现：
 

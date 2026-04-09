@@ -4,8 +4,13 @@
  * Ported from EasyOriginals' book-audio.js. Provides free text-to-speech
  * synthesis via the Edge browser's built-in TTS service.
  *
- * Supports 57+ voices across 30+ languages with adjustable speech rate.
+ * Supports dual voice/speed for Chinese and English, with three audio modes:
+ * - original: speak the original text
+ * - translated: speak the translated text
+ * - bilingual: interleave original and translated per paragraph
  */
+
+import { detectLanguage } from './language-utils.js';
 
 const EDGE_TTS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
 const EDGE_TTS_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
@@ -136,58 +141,134 @@ export async function synthesizeText(text, options = {}) {
 }
 
 /**
- * Split text into sentences for paragraph-level synthesis.
- * Inspired by tepub's audiobook/preprocess.py sentence segmentation.
+ * Strip markdown formatting from text for cleaner TTS output.
+ * @param {string} text
+ * @returns {string}
  */
-export function splitIntoSentences(text) {
-  if (!text.trim()) return [];
-
-  // Split on sentence boundaries: . ! ? followed by space + uppercase or end of string
-  const sentences = text
-    .split(/(?<=[.!?])\s+(?=[A-Z""])|(?<=[.!?])$/)
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
-
-  return sentences;
+export function stripMarkdown(text) {
+  return text
+    .replace(/^#{1,6}\s+/gm, '')          // Headings
+    .replace(/\*\*(.+?)\*\*/g, '$1')       // Bold
+    .replace(/\*(.+?)\*/g, '$1')           // Italic
+    .replace(/`(.+?)`/g, '$1')             // Inline code
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '') // Images (before links!)
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Links
+    .replace(/^[-*+]\s+/gm, '')            // Unordered lists
+    .replace(/^\d+\.\s+/gm, '')            // Ordered lists
+    .replace(/^>\s+/gm, '')                // Blockquotes
+    .replace(/---+/g, '')                  // Horizontal rules
+    .replace(/\|/g, '')                    // Table pipes
+    .trim();
 }
 
 /**
- * Generate audio for a full chapter by synthesizing paragraph by paragraph.
- *
- * @param {string} text - Full chapter text (markdown stripped to plain text).
- * @param {object} options - { voice, speechRate, onProgress(current, total) }
- * @returns {Promise<Blob>} Concatenated MP3 blob.
+ * Split markdown text into paragraphs for TTS processing.
+ * @param {string} text
+ * @returns {string[]}
  */
-export async function generateChapterAudio(text, options = {}) {
-  _cancelled = false;
-  const { onProgress } = options;
-
-  // Split into paragraphs
-  const paragraphs = text
+export function splitIntoParagraphs(text) {
+  if (!text.trim()) return [];
+  return text
     .split(/\n\n+/)
     .map(p => p.replace(/\n/g, ' ').trim())
-    .filter(p => p.length > 0 && !/^#{1,6}\s*$/.test(p)); // Skip empty headings
+    .filter(p => p.length > 0 && !/^#{1,6}\s*$/.test(p));
+}
 
-  const total = paragraphs.length;
+/**
+ * Build an ordered list of TTS segments from chapter text.
+ * Each segment has { text, lang } for voice/speed routing.
+ *
+ * @param {object} options
+ * @param {string} options.originalText - Original chapter markdown.
+ * @param {string} [options.translatedText] - Translated chapter markdown.
+ * @param {'original'|'translated'|'bilingual'} options.audioMode
+ * @returns {Array<{text: string, lang: 'zh'|'en'}>}
+ */
+export function buildChapterSegments({ originalText, translatedText, audioMode }) {
+  const origParas = splitIntoParagraphs(originalText || '');
+  const transParas = translatedText ? splitIntoParagraphs(translatedText) : [];
+
+  const segments = [];
+
+  if (audioMode === 'translated') {
+    for (const para of transParas) {
+      const clean = stripMarkdown(para);
+      if (!clean.trim()) continue;
+      segments.push({ text: clean, lang: detectLanguage(clean) });
+    }
+  } else if (audioMode === 'bilingual') {
+    const maxLen = Math.max(origParas.length, transParas.length);
+    for (let i = 0; i < maxLen; i++) {
+      if (i < origParas.length) {
+        const cleanOrig = stripMarkdown(origParas[i]);
+        if (cleanOrig.trim()) {
+          segments.push({ text: cleanOrig, lang: detectLanguage(cleanOrig) });
+        }
+      }
+      if (i < transParas.length) {
+        const cleanTrans = stripMarkdown(transParas[i]);
+        if (cleanTrans.trim()) {
+          segments.push({ text: cleanTrans, lang: detectLanguage(cleanTrans) });
+        }
+      }
+    }
+  } else {
+    // 'original' mode (default)
+    for (const para of origParas) {
+      const clean = stripMarkdown(para);
+      if (!clean.trim()) continue;
+      segments.push({ text: clean, lang: detectLanguage(clean) });
+    }
+  }
+
+  return segments;
+}
+
+/**
+ * Generate audio for a full chapter using dual voice/speed settings.
+ *
+ * @param {object} options
+ * @param {string} options.originalText - Original chapter markdown.
+ * @param {string} [options.translatedText] - Translated chapter markdown.
+ * @param {'original'|'translated'|'bilingual'} [options.audioMode='original']
+ * @param {string} [options.voiceEn='en-US-AriaNeural'] - English voice.
+ * @param {string} [options.voiceZh='zh-CN-XiaoxiaoNeural'] - Chinese voice.
+ * @param {number} [options.speechRateEn=0] - English speech rate.
+ * @param {number} [options.speechRateZh=0] - Chinese speech rate.
+ * @param {Function} [options.onProgress] - Progress callback(current, total).
+ * @returns {Promise<Blob>} Concatenated MP3 blob.
+ */
+export async function generateChapterAudio(options = {}) {
+  _cancelled = false;
+  const {
+    originalText,
+    translatedText,
+    audioMode = 'original',
+    voiceEn = 'en-US-AriaNeural',
+    voiceZh = 'zh-CN-XiaoxiaoNeural',
+    speechRateEn = 0,
+    speechRateZh = 0,
+    onProgress,
+  } = options;
+
+  const segments = buildChapterSegments({ originalText, translatedText, audioMode });
+  const total = segments.length;
   const audioBlobs = [];
 
-  for (let i = 0; i < paragraphs.length; i++) {
+  for (let i = 0; i < segments.length; i++) {
     if (_cancelled) throw new Error('Audio generation cancelled');
 
-    const para = paragraphs[i];
-
-    // Strip markdown formatting for TTS
-    const cleanText = stripMarkdown(para);
-    if (!cleanText.trim()) continue;
+    const seg = segments[i];
+    const voice = seg.lang === 'zh' ? voiceZh : voiceEn;
+    const speechRate = seg.lang === 'zh' ? speechRateZh : speechRateEn;
 
     let blob;
     for (let attempt = 0; attempt <= SYNTH_MAX_RETRIES; attempt++) {
       try {
-        blob = await synthesizeText(cleanText, options);
+        blob = await synthesizeText(seg.text, { voice, speechRate });
         break;
       } catch (err) {
         if (attempt === SYNTH_MAX_RETRIES || _cancelled) throw err;
-        // Brief pause before retry
         await new Promise(r => setTimeout(r, 1000));
       }
     }
@@ -196,27 +277,18 @@ export async function generateChapterAudio(text, options = {}) {
     if (onProgress) onProgress(i + 1, total);
   }
 
-  // Concatenate all MP3 blobs
   return new Blob(audioBlobs, { type: 'audio/mpeg' });
 }
 
 /**
- * Strip markdown formatting from text for cleaner TTS output.
+ * Split text into sentences for paragraph-level synthesis.
  */
-function stripMarkdown(text) {
+export function splitIntoSentences(text) {
+  if (!text.trim()) return [];
   return text
-    .replace(/^#{1,6}\s+/gm, '')          // Headings
-    .replace(/\*\*(.+?)\*\*/g, '$1')       // Bold
-    .replace(/\*(.+?)\*/g, '$1')           // Italic
-    .replace(/`(.+?)`/g, '$1')             // Inline code
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Links
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '') // Images
-    .replace(/^[-*+]\s+/gm, '')            // Unordered lists
-    .replace(/^\d+\.\s+/gm, '')            // Ordered lists
-    .replace(/^>\s+/gm, '')                // Blockquotes
-    .replace(/---+/g, '')                  // Horizontal rules
-    .replace(/\|/g, '')                    // Table pipes
-    .trim();
+    .split(/(?<=[.!?])\s+(?=[A-Z""])|(?<=[.!?])$/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
 }
 
 /**

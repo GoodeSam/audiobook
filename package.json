@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "repository": {
     "type": "git",
@@ -14,6 +16,8 @@
   },
   "license": "ISC",
   "devDependencies": {
-    "vite": "^8.0.8"
+    "jsdom": "^29.0.2",
+    "vite": "^8.0.8",
+    "vitest": "^4.1.4"
   }
 }
