@@ -10,17 +10,11 @@ import { generateChapterAudio, cancelGeneration } from './edge-tts.js';
 import { translateChapter, cancelTranslation, resetTranslationState } from './ms-translator.js';
 import { sanitizeFilename, exportMultipleChapters } from './chapter-export.js';
 import { ProgressTracker } from './progress-tracker.js';
+import { createAppState, resetStateForNewBook } from './app-state.js';
 
 // ── State ──
 
-const state = {
-  book: null,                // { title, chapters: [{title, html, markdown, translatedMarkdown?}] }
-  audioBlobs: {},            // chapterIndex -> Blob
-  activeChapter: null,       // currently displayed chapter index
-  activeTab: 'original',    // 'original' | 'translated'
-  generating: false,
-  selectedChapters: new Set(),
-};
+const state = createAppState();
 
 // ── DOM elements ──
 
@@ -126,10 +120,8 @@ async function handleFile(file) {
       ch.translatedMarkdown = null;
     }
 
-    state.book = book;
-    state.audioBlobs = {};
-    state.activeChapter = null;
-    state.selectedChapters = new Set();
+    // Reset all state flags (including generating) to prevent stale locks
+    resetStateForNewBook(state, book);
 
     // Restore drop zone before switching screens so it's ready if user comes back
     resetDropZone();
@@ -150,6 +142,12 @@ function showReaderScreen() {
 }
 
 btnBack.addEventListener('click', () => {
+  // Cancel any in-progress operations so generating doesn't stay stuck
+  cancelGeneration();
+  cancelTranslation();
+  state.generating = false;
+  hideProgress();
+
   readerScreen.classList.remove('active');
   uploadScreen.classList.add('active');
   resetDropZone();
