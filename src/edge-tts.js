@@ -248,7 +248,7 @@ export function buildChapterSegments({ originalText, translatedText, audioMode }
  * @param {string} [options.translatedText] - Translated chapter markdown.
  * @param {'original'|'translated'|'bilingual'} [options.audioMode='original']
  * @param {string} [options.voiceEn='en-US-AriaNeural'] - English voice.
- * @param {string} [options.voiceZh='zh-CN-XiaoxiaoNeural'] - Chinese voice.
+ * @param {string} [options.voiceZh='zh-CN-YunyangNeural'] - Chinese voice.
  * @param {number} [options.speechRateEn=0] - English speech rate.
  * @param {number} [options.speechRateZh=0] - Chinese speech rate.
  * @param {Function} [options.onProgress] - Progress callback(current, total).
@@ -261,7 +261,7 @@ export async function generateChapterAudio(options = {}) {
     translatedText,
     audioMode = 'original',
     voiceEn = 'en-US-AriaNeural',
-    voiceZh = 'zh-CN-XiaoxiaoNeural',
+    voiceZh = 'zh-CN-YunyangNeural',
     speechRateEn = 0,
     speechRateZh = 0,
     onProgress,
