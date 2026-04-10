@@ -592,6 +592,7 @@ function showProgress(title) {
   progressBar.style.width = '0%';
   progressText.textContent = '';
   progressOverlay.hidden = false;
+  progressOverlay.classList.add('visible');
 }
 
 function updateProgress(current, total, text) {
@@ -602,6 +603,7 @@ function updateProgress(current, total, text) {
 
 function hideProgress() {
   progressOverlay.hidden = true;
+  progressOverlay.classList.remove('visible');
 }
 
 btnCancel.addEventListener('click', () => {

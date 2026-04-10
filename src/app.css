@@ -429,14 +429,20 @@ body {
 }
 
 /* Progress Overlay */
+/* The overlay must NOT use display:flex unconditionally — that overrides
+   the hidden attribute's display:none, making the overlay permanently
+   visible and blocking all user input. Gate display:flex behind .visible. */
 .progress-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.5);
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
   z-index: 100;
+}
+.progress-overlay.visible {
+  display: flex;
 }
 
 .progress-card {
