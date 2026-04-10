@@ -230,8 +230,37 @@ function selectChapter(idx) {
   // Update tabs
   updateTabs();
   showTab(state.activeTab);
+  updateChapterButtons(idx);
+}
 
-  btnDownloadChapter.disabled = !state.audioBlobs[idx];
+/**
+ * Update chapter action button states based on completed operations.
+ */
+function updateChapterButtons(idx) {
+  const ch = state.book.chapters[idx];
+  const hasTranslation = !!ch.translatedMarkdown;
+  const hasAudio = !!state.audioBlobs[idx];
+
+  // Translate button
+  if (hasTranslation) {
+    btnTranslateChapter.textContent = 'Translated \u2713';
+    btnTranslateChapter.classList.add('done');
+  } else {
+    btnTranslateChapter.textContent = 'Translate';
+    btnTranslateChapter.classList.remove('done');
+  }
+
+  // Generate MP3 button
+  if (hasAudio) {
+    btnGenerateChapter.textContent = 'MP3 Ready \u2713';
+    btnGenerateChapter.classList.add('done');
+  } else {
+    btnGenerateChapter.textContent = 'Generate MP3';
+    btnGenerateChapter.classList.remove('done');
+  }
+
+  // Download buttons
+  btnDownloadChapter.disabled = !hasAudio;
 }
 
 function showPlaceholder() {
@@ -281,6 +310,8 @@ btnSelectAll.addEventListener('click', () => {
 
 btnTranslateChapter.addEventListener('click', async () => {
   if (state.activeChapter === null || state.generating) return;
+  // Skip if already translated
+  if (state.book.chapters[state.activeChapter].translatedMarkdown) return;
   await translateSingleChapter(state.activeChapter);
 });
 
@@ -305,6 +336,7 @@ async function translateSingleChapter(idx) {
     renderChapterList();
     updateTabs();
     showTab(state.activeTab);
+    if (state.activeChapter === idx) updateChapterButtons(idx);
   } catch (err) {
     if (!err.message.includes('cancelled')) {
       alert('Translation error: ' + err.message);
@@ -380,6 +412,8 @@ function detectSourceLang() {
 
 btnGenerateChapter.addEventListener('click', async () => {
   if (state.activeChapter === null || state.generating) return;
+  // Skip if already generated
+  if (state.audioBlobs[state.activeChapter]) return;
   await generateSingleChapter(state.activeChapter);
 });
 

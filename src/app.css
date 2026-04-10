@@ -335,6 +335,14 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.action-btn.done {
+  background: var(--success);
+  border-color: var(--success);
+  cursor: default;
+}
+.action-btn.done:hover {
+  background: var(--success);
+}
 
 .cancel-btn {
   background: var(--danger);
