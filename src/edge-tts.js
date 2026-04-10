@@ -50,7 +50,7 @@ async function generateSecMsGec() {
  * @returns {Promise<Blob>} MP3 audio blob.
  */
 export async function synthesizeText(text, options = {}) {
-  const voice = options.voice || 'en-US-AriaNeural';
+  const voice = options.voice || 'en-US-ChristopherNeural';
   const speechRate = options.speechRate || 0;
   const connId = crypto.randomUUID().replace(/-/g, '');
   const requestId = crypto.randomUUID().replace(/-/g, '');
@@ -247,7 +247,7 @@ export function buildChapterSegments({ originalText, translatedText, audioMode }
  * @param {string} options.originalText - Original chapter markdown.
  * @param {string} [options.translatedText] - Translated chapter markdown.
  * @param {'original'|'translated'|'bilingual'} [options.audioMode='original']
- * @param {string} [options.voiceEn='en-US-AriaNeural'] - English voice.
+ * @param {string} [options.voiceEn='en-US-ChristopherNeural'] - English voice.
  * @param {string} [options.voiceZh='zh-CN-YunyangNeural'] - Chinese voice.
  * @param {number} [options.speechRateEn=0] - English speech rate.
  * @param {number} [options.speechRateZh=0] - Chinese speech rate.
@@ -260,7 +260,7 @@ export async function generateChapterAudio(options = {}) {
     originalText,
     translatedText,
     audioMode = 'original',
-    voiceEn = 'en-US-AriaNeural',
+    voiceEn = 'en-US-ChristopherNeural',
     voiceZh = 'zh-CN-YunyangNeural',
     speechRateEn = 0,
     speechRateZh = 0,
