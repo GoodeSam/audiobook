@@ -94,4 +94,24 @@ describe('splitByLanguage', () => {
     const reconstructed = result.map(s => s.text).join('');
     expect(reconstructed).toBe(input);
   });
+
+  it('keeps digits attached to surrounding Chinese context', () => {
+    const result = splitByLanguage('他有3个苹果');
+    // Should be one Chinese segment, not split at the digit
+    expect(result.length).toBe(1);
+    expect(result[0].lang).toBe('zh');
+    expect(result[0].text).toBe('他有3个苹果');
+  });
+
+  it('keeps digits attached to surrounding English context', () => {
+    const result = splitByLanguage('Chapter 12 begins');
+    expect(result.length).toBe(1);
+    expect(result[0].lang).toBe('en');
+  });
+
+  it('keeps multi-digit numbers in Chinese context', () => {
+    const result = splitByLanguage('共100页');
+    expect(result.length).toBe(1);
+    expect(result[0].lang).toBe('zh');
+  });
 });
