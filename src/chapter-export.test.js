@@ -98,4 +98,43 @@ describe('exportMultipleChapters', () => {
     expect(result[1].filename).toBe('001_Ch-1_translated.md');
     expect(result[1].content).toBe('中文');
   });
+
+  it('includes bilingual markdown when requested', () => {
+    const chaps = [
+      { title: 'Ch 1', markdown: 'Hello.\n\nWorld.', translatedMarkdown: '你好。\n\n世界。' },
+    ];
+    const result = exportMultipleChapters(chaps, [0], { includeBilingual: true });
+
+    expect(result.length).toBe(2);
+    expect(result[0].filename).toBe('001_Ch-1.md');
+    expect(result[1].filename).toBe('001_Ch-1_bilingual.md');
+    expect(result[1].content).toContain('Hello.');
+    expect(result[1].content).toContain('你好。');
+    expect(result[1].content).toContain('World.');
+    expect(result[1].content).toContain('世界。');
+  });
+
+  it('includes all three formats when both options set', () => {
+    const chaps = [
+      { title: 'Ch 1', markdown: 'Text.', translatedMarkdown: '文本。' },
+    ];
+    const result = exportMultipleChapters(chaps, [0], {
+      includeTranslation: true,
+      includeBilingual: true,
+    });
+
+    expect(result.length).toBe(3);
+    expect(result[0].filename).toBe('001_Ch-1.md');
+    expect(result[1].filename).toBe('001_Ch-1_translated.md');
+    expect(result[2].filename).toBe('001_Ch-1_bilingual.md');
+  });
+
+  it('skips bilingual when no translation exists', () => {
+    const chaps = [
+      { title: 'Ch 1', markdown: 'Text.' },
+    ];
+    const result = exportMultipleChapters(chaps, [0], { includeBilingual: true });
+
+    expect(result.length).toBe(1); // Only original
+  });
 });

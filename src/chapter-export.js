@@ -1,9 +1,11 @@
 /**
  * Chapter export utilities.
  *
- * Provides functions for exporting one or multiple chapters as Markdown files.
- * Extracted from main.js for testability.
+ * Provides functions for exporting one or multiple chapters as Markdown files
+ * in three formats: original, translated-only, and bilingual (alternating).
  */
+
+import { buildBilingualMarkdown } from './bilingual-view.js';
 
 /**
  * Sanitize a string for use as a filename.
@@ -36,11 +38,12 @@ export function exportChapterAsMarkdown(chapter) {
  * @param {Array<{title: string, markdown: string, translatedMarkdown?: string}>} chapters
  * @param {number[]} [indices] - Chapter indices to export. If omitted, exports all.
  * @param {object} [options]
- * @param {boolean} [options.includeTranslation=false] - Include translated versions.
+ * @param {boolean} [options.includeTranslation=false] - Include translated-only files.
+ * @param {boolean} [options.includeBilingual=false] - Include bilingual (alternating) files.
  * @returns {Array<{filename: string, content: string}>}
  */
 export function exportMultipleChapters(chapters, indices, options = {}) {
-  const { includeTranslation = false } = options;
+  const { includeTranslation = false, includeBilingual = false } = options;
   const selected = indices || chapters.map((_, i) => i);
   const files = [];
 
@@ -59,6 +62,13 @@ export function exportMultipleChapters(chapters, indices, options = {}) {
       files.push({
         filename: `${prefix}_${safeName}_translated.md`,
         content: ch.translatedMarkdown,
+      });
+    }
+
+    if (includeBilingual && ch.translatedMarkdown) {
+      files.push({
+        filename: `${prefix}_${safeName}_bilingual.md`,
+        content: buildBilingualMarkdown(ch.markdown, ch.translatedMarkdown),
       });
     }
   }

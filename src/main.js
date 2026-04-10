@@ -781,8 +781,19 @@ btnDownloadChapter.addEventListener('click', () => {
 btnDownloadMd.addEventListener('click', () => {
   if (state.activeChapter === null) return;
   const ch = state.book.chapters[state.activeChapter];
-  const blob = new Blob([ch.markdown], { type: 'text/markdown' });
-  downloadBlob(blob, `${sanitizeFilename(ch.title)}.md`);
+  const safeName = sanitizeFilename(ch.title);
+
+  if (state.activeTab === 'translated' && ch.translatedMarkdown) {
+    const blob = new Blob([ch.translatedMarkdown], { type: 'text/markdown' });
+    downloadBlob(blob, `${safeName}_translated.md`);
+  } else if (state.activeTab === 'bilingual' && ch.translatedMarkdown) {
+    const bilingual = buildBilingualMarkdown(ch.markdown, ch.translatedMarkdown);
+    const blob = new Blob([bilingual], { type: 'text/markdown' });
+    downloadBlob(blob, `${safeName}_bilingual.md`);
+  } else {
+    const blob = new Blob([ch.markdown], { type: 'text/markdown' });
+    downloadBlob(blob, `${safeName}.md`);
+  }
 });
 
 btnExportSelected.addEventListener('click', async () => {
@@ -790,7 +801,10 @@ btnExportSelected.addEventListener('click', async () => {
   if (indices.length === 0) return;
 
   const hasTranslations = indices.some(i => state.book.chapters[i].translatedMarkdown);
-  const files = exportMultipleChapters(state.book.chapters, indices, { includeTranslation: hasTranslations });
+  const files = exportMultipleChapters(state.book.chapters, indices, {
+    includeTranslation: hasTranslations,
+    includeBilingual: hasTranslations,
+  });
 
   if (files.length === 1) {
     const blob = new Blob([files[0].content], { type: 'text/markdown' });
@@ -798,7 +812,7 @@ btnExportSelected.addEventListener('click', async () => {
     return;
   }
 
-  // Multiple files -> ZIP
+  // Multiple files -> ZIP with subfolders
   const JSZip = (await import('jszip')).default;
   const zip = new JSZip();
   for (const f of files) zip.file(f.filename, f.content);
@@ -821,6 +835,7 @@ btnDownloadAll.addEventListener('click', async () => {
     zip.file(`${prefix}_${safeName}.md`, chapters[i].markdown);
     if (chapters[i].translatedMarkdown) {
       zip.file(`${prefix}_${safeName}_translated.md`, chapters[i].translatedMarkdown);
+      zip.file(`${prefix}_${safeName}_bilingual.md`, buildBilingualMarkdown(chapters[i].markdown, chapters[i].translatedMarkdown));
     }
   }
 
