@@ -223,6 +223,7 @@ function selectChapter(idx) {
   }
 
   contentPlaceholder.hidden = true;
+  contentPlaceholder.classList.remove('visible');
   chapterView.hidden = false;
   chapterTitle.textContent = ch.title;
 
@@ -235,6 +236,7 @@ function selectChapter(idx) {
 
 function showPlaceholder() {
   contentPlaceholder.hidden = false;
+  contentPlaceholder.classList.add('visible');
   chapterView.hidden = true;
 }
 

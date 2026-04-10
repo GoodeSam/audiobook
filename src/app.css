@@ -288,11 +288,14 @@ body {
 }
 
 .placeholder {
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
   height: 100%;
   color: var(--muted);
+}
+.placeholder.visible {
+  display: flex;
 }
 
 .chapter-header {
