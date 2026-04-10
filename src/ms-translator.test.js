@@ -241,8 +241,11 @@ describe('translateChapter', () => {
     const markdown = 'Text above.\n\n---\n\nText below.';
     const fetchFn = mockFetch([
       okTextResponse('token'),
-      okJsonResponse([{ translations: [{ text: '上面。' }] }]),
-      okJsonResponse([{ translations: [{ text: '下面。' }] }]),
+      // Both texts batched in one call (rule is skipped, not a flush point)
+      okJsonResponse([
+        { translations: [{ text: '上面。' }] },
+        { translations: [{ text: '下面。' }] },
+      ]),
     ]);
 
     const result = await translateChapter(markdown, 'en', 'zh-Hans', { fetchFn });
@@ -309,12 +312,15 @@ describe('translateChapter batching', () => {
     expect(fetchFn.calls.length).toBe(2);
   });
 
-  it('flushes batch before skipped paragraphs', async () => {
+  it('accumulates across skip paragraphs into one batch', async () => {
     const markdown = 'Text.\n\n# Heading\n\nMore text.';
     const fetchFn = mockFetch([
       okTextResponse('token'),
-      okJsonResponse([{ translations: [{ text: '文本。' }] }]),
-      okJsonResponse([{ translations: [{ text: '更多。' }] }]),
+      // Both translatable paragraphs batched together despite heading between them
+      okJsonResponse([
+        { translations: [{ text: '文本。' }] },
+        { translations: [{ text: '更多。' }] },
+      ]),
     ]);
 
     const result = await translateChapter(markdown, 'en', 'zh-Hans', { fetchFn });
@@ -322,5 +328,7 @@ describe('translateChapter batching', () => {
     expect(result).toContain('文本。');
     expect(result).toContain('# Heading');
     expect(result).toContain('更多。');
+    // Only 1 auth + 1 translate call (not split by heading)
+    expect(fetchFn.calls.length).toBe(2);
   });
 });

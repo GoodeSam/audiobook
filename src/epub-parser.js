@@ -75,25 +75,31 @@ export async function parseEPUB(file) {
     }
   }
 
-  // 7. Extract chapter content
-  const chapters = [];
-  for (let i = 0; i < spineItems.length; i++) {
-    const href = spineItems[i];
-    const fullPath = opfDir + href;
-    const zipEntry = zip.file(fullPath);
-    if (!zipEntry) continue;
+  // 7. Extract chapter content with bounded concurrency
+  const CONCURRENCY = 4;
+  const chapterEntries = spineItems.map((href, i) => ({ href, index: i }));
+  const chapters = new Array(chapterEntries.length);
+  let nextIdx = 0;
 
-    const html = await zipEntry.async('text');
-    const title = hrefToTitle[href] || `Chapter ${i + 1}`;
+  async function processChapter() {
+    while (nextIdx < chapterEntries.length) {
+      const entry = chapterEntries[nextIdx++];
+      const fullPath = opfDir + entry.href;
+      const zipEntry = zip.file(fullPath);
+      if (!zipEntry) { chapters[entry.index] = null; continue; }
 
-    // Resolve images to data URLs
-    const processedHtml = await resolveImages(html, opfDir + href, zip);
-
-    chapters.push({ title, href, html: processedHtml });
+      const html = await zipEntry.async('text');
+      const title = hrefToTitle[entry.href] || `Chapter ${entry.index + 1}`;
+      const processedHtml = await resolveImages(html, fullPath, zip);
+      chapters[entry.index] = { title, href: entry.href, html: processedHtml };
+    }
   }
 
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chapterEntries.length) }, processChapter));
+  const validChapters = chapters.filter(Boolean);
+
   // 8. Merge chapters that share the same TOC title (multi-file chapters)
-  const merged = mergeChapters(chapters, hrefToTitle);
+  const merged = mergeChapters(validChapters, hrefToTitle);
 
   return { title: bookTitle, chapters: merged };
 }

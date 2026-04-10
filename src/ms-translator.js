@@ -10,6 +10,8 @@
  * AbortController is used for immediate cancellation of in-flight requests.
  */
 
+import { splitParagraphs, isSkipParagraph } from './paragraph-utils.js';
+
 const MS_AUTH_URL = 'https://edge.microsoft.com/translate/auth';
 const MS_TRANSLATE_URL = 'https://api.cognitive.microsofttranslator.com/translate';
 const BATCH_SIZE = 25; // Microsoft API limit per request
@@ -89,17 +91,8 @@ export async function translateBatch(texts, from, to, fetchFn = fetch) {
   });
 }
 
-/**
- * Check if a markdown paragraph should be skipped (not translated).
- */
-function shouldSkipParagraph(para) {
-  const trimmed = para.trim();
-  if (!trimmed) return true;
-  if (/^#{1,6}\s+/.test(trimmed)) return true;
-  if (/^!\[.*\]\(.*\)$/.test(trimmed)) return true;
-  if (/^---+$/.test(trimmed)) return true;
-  return false;
-}
+// shouldSkipParagraph aliased from shared utility
+const shouldSkipParagraph = isSkipParagraph;
 
 /**
  * Translate a full markdown chapter in batches.
@@ -129,62 +122,66 @@ export async function translateChapter(markdown, from, to, options = {}) {
     onCheckpoint,
   } = options;
 
-  const paragraphs = markdown.split(/\n\n+/).filter(p => p.trim());
+  const paragraphs = splitParagraphs(markdown);
   const total = paragraphs.filter(p => !shouldSkipParagraph(p)).length;
   const translated = [...existingTranslations];
   let progress = existingTranslations.filter(
     (_, i) => i < paragraphs.length && !shouldSkipParagraph(paragraphs[i])
   ).length;
 
-  // Collect translatable paragraphs into batches
-  let batch = [];       // { index, text }
-  let batchStart = -1;
-
+  // Build ordered list of paragraph entries: translatable ones get batched,
+  // skipped ones (headings, images, rules) are inserted at their positions.
+  // We accumulate translatable text across skip boundaries up to BATCH_SIZE.
+  const entries = []; // { type: 'skip'|'translate', paraIndex, text }
   for (let i = startIndex; i < paragraphs.length; i++) {
-    if (_cancelled) throw new Error('Translation cancelled');
-
     const para = paragraphs[i];
-
     if (shouldSkipParagraph(para)) {
-      // Flush any pending batch before adding skipped paragraph
-      if (batch.length > 0) {
-        const results = await flushBatch(batch, from, to, fetchFn);
-        for (const result of results) {
-          translated.push(result);
-          progress++;
-          if (onProgress) onProgress(progress, total);
-        }
-        batch = [];
-      }
-      translated.push(para);
-      continue;
-    }
-
-    batch.push({ index: i, text: para.trim() });
-
-    // Flush when batch is full
-    if (batch.length >= BATCH_SIZE) {
-      const results = await flushBatch(batch, from, to, fetchFn);
-      for (const result of results) {
-        translated.push(result);
-        progress++;
-        if (onProgress) onProgress(progress, total);
-      }
-      if (onCheckpoint) onCheckpoint({ completedIndex: i + 1, translatedParagraphs: translated, totalParagraphs: paragraphs.length });
-      batch = [];
+      entries.push({ type: 'skip', paraIndex: i, text: para });
+    } else {
+      entries.push({ type: 'translate', paraIndex: i, text: para.trim() });
     }
   }
 
-  // Flush remaining batch
-  if (batch.length > 0) {
-    if (_cancelled) throw new Error('Translation cancelled');
-    const results = await flushBatch(batch, from, to, fetchFn);
-    for (const result of results) {
-      translated.push(result);
+  // Process in batches — only translatable entries go to the API
+  let batchTexts = [];
+  let batchEntryIndices = [];
+
+  async function flushCurrentBatch(lastParaIndex) {
+    if (batchTexts.length === 0) return;
+    const results = await translateBatch(batchTexts, from, to, fetchFn);
+    for (let r = 0; r < results.length; r++) {
+      entries[batchEntryIndices[r]].result = results[r];
       progress++;
       if (onProgress) onProgress(progress, total);
     }
-    if (onCheckpoint) onCheckpoint({ completedIndex: paragraphs.length, translatedParagraphs: translated, totalParagraphs: paragraphs.length });
+    batchTexts = [];
+    batchEntryIndices = [];
+    if (onCheckpoint) onCheckpoint({ completedIndex: lastParaIndex + 1, translatedParagraphs: translated, totalParagraphs: paragraphs.length });
+  }
+
+  for (let e = 0; e < entries.length; e++) {
+    if (_cancelled) throw new Error('Translation cancelled');
+    const entry = entries[e];
+
+    if (entry.type === 'skip') continue;
+
+    batchTexts.push(entry.text);
+    batchEntryIndices.push(e);
+
+    if (batchTexts.length >= BATCH_SIZE) {
+      await flushCurrentBatch(entry.paraIndex);
+    }
+  }
+
+  // Flush any remaining batch
+  if (batchTexts.length > 0) {
+    if (_cancelled) throw new Error('Translation cancelled');
+    await flushCurrentBatch(entries[entries.length - 1].paraIndex);
+  }
+
+  // Reconstruct output in paragraph order
+  for (const entry of entries) {
+    translated.push(entry.type === 'skip' ? entry.text : entry.result);
   }
 
   _abortController = null;

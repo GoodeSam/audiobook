@@ -12,6 +12,7 @@ import { sanitizeFilename, exportMultipleChapters } from './chapter-export.js';
 import { ProgressTracker } from './progress-tracker.js';
 import { buildBilingualMarkdown } from './bilingual-view.js';
 import { createAppState, resetStateForNewBook, resetStateOnError } from './app-state.js';
+import { countTranslatableParagraphs } from './paragraph-utils.js';
 
 // ── State ──
 
@@ -136,6 +137,7 @@ async function handleFile(file) {
     for (const ch of book.chapters) {
       ch.markdown = cleanMarkdown(htmlToMarkdown(ch.html));
       ch.translatedMarkdown = null;
+      delete ch.html; // Free memory — html is no longer needed after markdown conversion
     }
 
     // Reset all state flags (including generating and working)
@@ -221,14 +223,13 @@ function cleanupPreview() {
 
 let _previewPlaying = false;
 let _previewBtn = null;
+const _previewCache = new Map(); // key: `${voice}:${speechRate}:${sampleKey}` → Blob
 
 async function previewVoice(voice, speechRate, sampleKey, btn) {
-  // If already playing from this button, stop
   if (_previewPlaying && _previewBtn === btn) {
     stopPreview(btn);
     return;
   }
-  // Stop any other preview
   if (_previewBtn && _previewBtn !== btn) stopPreview(_previewBtn);
   cleanupPreview();
 
@@ -237,7 +238,12 @@ async function previewVoice(voice, speechRate, sampleKey, btn) {
   _previewBtn = btn;
 
   try {
-    const blob = await synthesizeText(PREVIEW_SAMPLES[sampleKey], { voice, speechRate });
+    const cacheKey = `${voice}:${speechRate}:${sampleKey}`;
+    let blob = _previewCache.get(cacheKey);
+    if (!blob) {
+      blob = await synthesizeText(PREVIEW_SAMPLES[sampleKey], { voice, speechRate });
+      _previewCache.set(cacheKey, blob);
+    }
     _previewUrl = URL.createObjectURL(blob);
     _previewAudio = new Audio(_previewUrl);
     _previewPlaying = true;
@@ -277,52 +283,78 @@ btnPreviewZh.addEventListener('click', () => {
 let _lastCheckedIdx = null; // For Shift+click range selection
 
 function renderChapterList() {
-  chapterList.innerHTML = '';
-  state.book.chapters.forEach((ch, idx) => {
-    const li = document.createElement('li');
-    li.className = 'chapter-item';
-    li.dataset.index = idx;
-    li.tabIndex = 0;
-    li.setAttribute('role', 'option');
-    li.setAttribute('aria-selected', idx === state.activeChapter ? 'true' : 'false');
-    if (idx === state.activeChapter) li.classList.add('active');
+  // Full rebuild only if chapter count changed (new book)
+  if (chapterList.children.length !== state.book.chapters.length) {
+    chapterList.innerHTML = '';
+    state.book.chapters.forEach((ch, idx) => {
+      const li = document.createElement('li');
+      li.className = 'chapter-item';
+      li.dataset.index = idx;
+      li.tabIndex = 0;
+      li.setAttribute('role', 'option');
 
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = state.selectedChapters.has(idx);
-    cb.addEventListener('click', (e) => {
-      e.stopPropagation();
-      handleCheckboxClick(idx, cb.checked, e.shiftKey);
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'chapter-cb';
+
+      const icons = document.createElement('span');
+      icons.className = 'status-icons';
+
+      const name = document.createElement('span');
+      name.className = 'chapter-name';
+      name.textContent = ch.title;
+      name.title = ch.title;
+
+      li.appendChild(cb);
+      li.appendChild(icons);
+      li.appendChild(name);
+      chapterList.appendChild(li);
     });
+  }
 
-    const icons = document.createElement('span');
-    icons.className = 'status-icons';
+  // Patch each row's state without rebuilding DOM
+  for (let idx = 0; idx < state.book.chapters.length; idx++) {
+    const li = chapterList.children[idx];
+    const ch = state.book.chapters[idx];
+    const cb = li.querySelector('.chapter-cb');
+    const icons = li.querySelector('.status-icons');
+
+    li.classList.toggle('active', idx === state.activeChapter);
+    li.setAttribute('aria-selected', idx === state.activeChapter ? 'true' : 'false');
+    cb.checked = state.selectedChapters.has(idx);
+
     const hasTrCp = !!state.translationCheckpoints[idx];
     const hasAuCp = !!state.audioCheckpoints[idx];
-    if (ch.translatedMarkdown && !hasTrCp) icons.innerHTML += '<span class="status-icon" title="Translated">🌐</span>';
-    else if (hasTrCp) icons.innerHTML += '<span class="status-icon" title="Translation paused">⏸</span>';
-    if (state.audioBlobs[idx] && !hasAuCp) icons.innerHTML += '<span class="status-icon" title="Audio ready">🔊</span>';
-    else if (hasAuCp) icons.innerHTML += '<span class="status-icon" title="Audio paused">⏸</span>';
-    if (!ch.translatedMarkdown && !state.audioBlobs[idx] && !hasTrCp && !hasAuCp) icons.innerHTML = '<span class="status-icon">📄</span>';
-
-    const name = document.createElement('span');
-    name.className = 'chapter-name';
-    name.textContent = ch.title;
-    name.title = ch.title;
-
-    li.appendChild(cb);
-    li.appendChild(icons);
-    li.appendChild(name);
-    li.addEventListener('click', (e) => {
-      if (e.target.tagName !== 'INPUT') selectChapter(idx);
-    });
-    li.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectChapter(idx); }
-    });
-    chapterList.appendChild(li);
-  });
+    let iconHtml = '';
+    if (ch.translatedMarkdown && !hasTrCp) iconHtml += '<span class="status-icon" title="Translated">🌐</span>';
+    else if (hasTrCp) iconHtml += '<span class="status-icon" title="Translation paused">⏸</span>';
+    if (state.audioBlobs[idx] && !hasAuCp) iconHtml += '<span class="status-icon" title="Audio ready">🔊</span>';
+    else if (hasAuCp) iconHtml += '<span class="status-icon" title="Audio paused">⏸</span>';
+    if (!iconHtml) iconHtml = '<span class="status-icon">📄</span>';
+    icons.innerHTML = iconHtml;
+  }
   updateBulkButtons();
 }
+
+// Event delegation for chapter list — avoids per-row listeners
+chapterList.addEventListener('click', (e) => {
+  const li = e.target.closest('.chapter-item');
+  if (!li) return;
+  const idx = parseInt(li.dataset.index);
+  if (e.target.classList.contains('chapter-cb')) {
+    e.stopPropagation();
+    handleCheckboxClick(idx, e.target.checked, e.shiftKey);
+  } else {
+    selectChapter(idx);
+  }
+});
+chapterList.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const li = e.target.closest('.chapter-item');
+  if (!li) return;
+  e.preventDefault();
+  selectChapter(parseInt(li.dataset.index));
+});
 
 function handleCheckboxClick(idx, checked, shiftKey) {
   if (shiftKey && _lastCheckedIdx !== null) {
@@ -432,23 +464,43 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   });
 });
 
+// Render cache: avoids re-rendering markdown on tab switches
+const _renderCache = new Map(); // key: `${chapterIndex}:${tab}` → html string
+
+function invalidateRenderCache(idx) {
+  for (const key of _renderCache.keys()) {
+    if (key.startsWith(`${idx}:`)) _renderCache.delete(key);
+  }
+}
+
+function getCachedRender(idx, tab, renderFn) {
+  const key = `${idx}:${tab}`;
+  if (!_renderCache.has(key)) {
+    _renderCache.set(key, renderFn());
+  }
+  return _renderCache.get(key);
+}
+
 function showTab(tab) {
-  const ch = state.book.chapters[state.activeChapter];
+  const idx = state.activeChapter;
+  const ch = state.book.chapters[idx];
   if (!ch) return;
 
   const notTranslatedMsg = '<p style="color: var(--muted)">Not yet translated. Click "Translate" to translate this chapter.</p>';
 
   if (tab === 'translated' && ch.translatedMarkdown) {
-    chapterMarkdown.innerHTML = renderMarkdownHtml(ch.translatedMarkdown);
+    chapterMarkdown.innerHTML = getCachedRender(idx, 'translated', () => renderMarkdownHtml(ch.translatedMarkdown));
   } else if (tab === 'translated') {
     chapterMarkdown.innerHTML = notTranslatedMsg;
   } else if (tab === 'bilingual' && ch.translatedMarkdown) {
-    const bilingual = buildBilingualMarkdown(ch.markdown, ch.translatedMarkdown);
-    chapterMarkdown.innerHTML = renderMarkdownHtml(bilingual);
+    chapterMarkdown.innerHTML = getCachedRender(idx, 'bilingual', () => {
+      const bilingual = buildBilingualMarkdown(ch.markdown, ch.translatedMarkdown);
+      return renderMarkdownHtml(bilingual);
+    });
   } else if (tab === 'bilingual') {
     chapterMarkdown.innerHTML = notTranslatedMsg;
   } else {
-    chapterMarkdown.innerHTML = renderMarkdownHtml(ch.markdown);
+    chapterMarkdown.innerHTML = getCachedRender(idx, 'original', () => renderMarkdownHtml(ch.markdown));
   }
 }
 
@@ -497,7 +549,8 @@ async function translateSingleChapter(idx) {
       onCheckpoint: (cpData) => { state.translationCheckpoints[idx] = cpData; },
     });
     ch.translatedMarkdown = translated;
-    delete state.translationCheckpoints[idx]; // Clear checkpoint on success
+    delete state.translationCheckpoints[idx];
+    invalidateRenderCache(idx); // Translation changed — clear cached renders
     renderChapterList();
     updateTabs();
     showTab(state.activeTab);
@@ -528,15 +581,9 @@ async function translateMultipleChapters(indices) {
   showProgress('Translating chapters...');
 
   try {
-    // Count only translatable paragraphs (skip headings, images, rules)
-    const isTranslatable = (p) => {
-      const t = p.trim();
-      return t && !/^#{1,6}\s+/.test(t) && !/^!\[.*\]\(.*\)$/.test(t) && !/^---+$/.test(t);
-    };
     let totalParas = 0;
     for (const idx of toTranslate) {
-      const md = state.book.chapters[idx].markdown;
-      totalParas += md.split(/\n\n+/).filter(isTranslatable).length;
+      totalParas += countTranslatableParagraphs(state.book.chapters[idx].markdown);
     }
     tracker.startPhase('translating', totalParas);
     let completedParas = 0;
@@ -556,7 +603,7 @@ async function translateMultipleChapters(indices) {
         },
       });
 
-      completedParas += ch.markdown.split(/\n\n+/).filter(isTranslatable).length;
+      completedParas += countTranslatableParagraphs(ch.markdown);
       ch.translatedMarkdown = translated;
       renderChapterList();
     }

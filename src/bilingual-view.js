@@ -5,6 +5,8 @@
  * translated text for side-by-side reading.
  */
 
+import { splitParagraphs, isHeading } from './paragraph-utils.js';
+
 /**
  * Build bilingual markdown with original and translated paragraphs interleaved.
  *
@@ -13,8 +15,8 @@
  * @returns {string} Interleaved markdown.
  */
 export function buildBilingualMarkdown(original, translated) {
-  const origParas = splitParas(original);
-  const transParas = splitParas(translated);
+  const origParas = splitParagraphs(original);
+  const transParas = splitParagraphs(translated);
 
   if (origParas.length === 0 && transParas.length === 0) return '';
 
@@ -32,13 +34,4 @@ export function buildBilingualMarkdown(original, translated) {
   }
 
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-}
-
-function splitParas(text) {
-  if (!text || !text.trim()) return [];
-  return text.split(/\n\n+/).filter(p => p.trim());
-}
-
-function isHeading(para) {
-  return /^#{1,6}\s+/.test(para.trim());
 }

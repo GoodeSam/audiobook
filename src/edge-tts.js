@@ -29,18 +29,28 @@ function langFromVoice(voice) {
   return m ? m[1] : 'en-US';
 }
 
+// GEC token is valid for 5-minute buckets — cache to avoid re-hashing per segment
+let _gecCache = null;
+let _gecBucket = 0;
+
 async function generateSecMsGec() {
   let ticks = Math.floor(Date.now() / 1000);
   ticks += 11644473600;
   ticks -= ticks % 300;
+
+  // Return cached token if still in the same 5-minute bucket
+  if (_gecCache && ticks === _gecBucket) return _gecCache;
+  _gecBucket = ticks;
+
   ticks *= 1e7;
   const input = `${ticks}${EDGE_TTS_TOKEN}`;
   const data = new TextEncoder().encode(input);
   const hashBuf = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hashBuf))
+  _gecCache = Array.from(new Uint8Array(hashBuf))
     .map(b => b.toString(16).padStart(2, '0'))
     .join('')
     .toUpperCase();
+  return _gecCache;
 }
 
 /**
@@ -323,7 +333,10 @@ export async function generateChapterAudio(options = {}) {
     if (onCheckpoint) onCheckpoint({ completedIndex: i + 1, totalSegments: total, audioBlobs });
   }
 
-  return new Blob(audioBlobs, { type: 'audio/mpeg' });
+  const finalBlob = new Blob(audioBlobs, { type: 'audio/mpeg' });
+  // Release segment blobs to free memory — the final blob owns the data now
+  audioBlobs.length = 0;
+  return finalBlob;
 }
 
 /**
