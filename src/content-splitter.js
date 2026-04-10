@@ -3,7 +3,9 @@
  *
  * If 10+ chapters exist and they're reasonably balanced, uses chapter
  * boundaries. Otherwise subdivides at the paragraph level.
- * Guarantees no mid-paragraph splits and targets ≤10% size variance.
+ * Guarantees no mid-paragraph splits. Targets ≤10% size variance when
+ * paragraph granularity allows it, but cannot guarantee it when individual
+ * paragraphs have extreme size differences.
  *
  * Each part can be independently translated and converted to audio.
  */

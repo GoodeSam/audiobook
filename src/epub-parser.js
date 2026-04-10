@@ -119,7 +119,10 @@ async function parseTOC(zip, opfDoc, opfDir, parser) {
     const navXml = await zip.file(navFullPath)?.async('text');
     if (navXml) {
       const navDoc = parser.parseFromString(navXml, 'application/xhtml+xml');
-      const navEl = navDoc.querySelector('nav[*|type="toc"], nav.toc, nav');
+      // Only select the TOC nav — avoid page-list, landmarks, etc.
+      const navEl = navDoc.querySelector('nav[*|type="toc"]')
+        || navDoc.querySelector('nav[epub\\:type="toc"]')
+        || navDoc.querySelector('nav.toc');
       if (navEl) {
         for (const a of navEl.querySelectorAll('a[href]')) {
           const rawHref = a.getAttribute('href');

@@ -275,12 +275,14 @@ async function previewVoice(voice, speechRate, sampleKey, btn) {
     btn.textContent = '\u25A0';
     btn.disabled = false;
     _previewAudio.play();
-  } catch {
+  } catch (err) {
     cleanupPreview();
     _previewPlaying = false;
     _previewBtn = null;
     btn.textContent = '\u25B6';
     btn.disabled = false;
+    btn.title = `Preview failed: ${err.message || 'unknown error'}`;
+    console.warn('Voice preview failed:', err);
   }
 }
 
@@ -611,7 +613,9 @@ async function translateMultipleChapters(indices) {
   state.generating = true;
   const toLang = translateLangSelect.value;
   const fromLang = detectSourceLang();
-  const toTranslate = indices.filter(i => !state.book.chapters[i].translatedMarkdown);
+  const toTranslate = indices.filter(i =>
+    !state.book.chapters[i].translatedMarkdown || state.translationCheckpoints[i]
+  );
 
   const tracker = new ProgressTracker([{ name: 'translating', weight: 1.0 }]);
   tracker.onProgress((s) => {
@@ -633,20 +637,26 @@ async function translateMultipleChapters(indices) {
       const idx = indices[i];
       const ch = state.book.chapters[idx];
 
-      if (ch.translatedMarkdown) continue;
+      if (ch.translatedMarkdown && !state.translationCheckpoints[idx]) continue;
 
-      progressTitle.textContent = `Translating ${i + 1}/${indices.length}: ${ch.title}`;
+      const tcp = state.translationCheckpoints[idx];
+      progressTitle.textContent = `Translating ${i + 1}/${indices.length}: ${ch.title}${tcp ? ' (resuming)' : ''}`;
       resetTranslationState();
 
       const translated = await translateChapter(ch.markdown, fromLang, toLang, {
+        startIndex: tcp ? tcp.completedIndex : 0,
+        existingTranslations: tcp ? tcp.translatedParagraphs : [],
         onProgress: (current) => {
           tracker.advance(completedParas + current);
         },
+        onCheckpoint: (cpData) => { state.translationCheckpoints[idx] = cpData; },
       });
 
       completedParas += countTranslatableParagraphs(ch.markdown);
       ch.translatedMarkdown = translated;
-      renderChapterList();
+      delete state.translationCheckpoints[idx];
+      invalidateRenderCache(idx);
+      updateChapterRow(idx);
     }
   } catch (err) {
     if (!err.message.includes('cancelled')) {
@@ -820,15 +830,20 @@ async function generateMultipleChapters(indices) {
       }
     }
 
-    // Phase 2: Generate audio
-    if (toGenerate.length > 0) {
-      tracker.startPhase('generating', toGenerate.length);
+    // Phase 2: Generate audio — recompute list to skip chapters with failed translations
+    const readyToGenerate = toGenerate.filter(i => {
+      const ch = state.book.chapters[i];
+      if ((mode === 'translated' || mode === 'bilingual') && !ch.translatedMarkdown) return false;
+      return true;
+    });
+    if (readyToGenerate.length > 0) {
+      tracker.startPhase('generating', readyToGenerate.length);
 
-      for (let i = 0; i < toGenerate.length; i++) {
-        const idx = toGenerate[i];
+      for (let i = 0; i < readyToGenerate.length; i++) {
+        const idx = readyToGenerate[i];
         const ch = state.book.chapters[idx];
         const acp = state.audioCheckpoints[idx];
-        progressTitle.textContent = `Generating ${i + 1}/${toGenerate.length}: ${ch.title}${acp ? ' (resuming)' : ''}`;
+        progressTitle.textContent = `Generating ${i + 1}/${readyToGenerate.length}: ${ch.title}${acp ? ' (resuming)' : ''}`;
 
         try {
           const blob = await generateChapterAudio({
@@ -902,50 +917,57 @@ btnDownloadMd.addEventListener('click', () => {
 });
 
 btnExportSelected.addEventListener('click', async () => {
-  const indices = [...state.selectedChapters].sort((a, b) => a - b);
-  if (indices.length === 0) return;
+  try {
+    const indices = [...state.selectedChapters].sort((a, b) => a - b);
+    if (indices.length === 0) return;
 
-  const hasTranslations = indices.some(i => state.book.chapters[i].translatedMarkdown);
-  const files = exportMultipleChapters(state.book.chapters, indices, {
-    includeTranslation: hasTranslations,
-    includeBilingual: hasTranslations,
-  });
+    const hasTranslations = indices.some(i => state.book.chapters[i].translatedMarkdown);
+    const files = exportMultipleChapters(state.book.chapters, indices, {
+      includeTranslation: hasTranslations,
+      includeBilingual: hasTranslations,
+    });
 
-  if (files.length === 1) {
-    const blob = new Blob([files[0].content], { type: 'text/markdown' });
-    downloadBlob(blob, files[0].filename);
-    return;
+    if (files.length === 1) {
+      const blob = new Blob([files[0].content], { type: 'text/markdown' });
+      downloadBlob(blob, files[0].filename);
+      return;
+    }
+
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    for (const f of files) zip.file(f.filename, f.content);
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    downloadBlob(zipBlob, `${sanitizeFilename(state.book.title)}_chapters.zip`);
+  } catch (err) {
+    alert('Export failed: ' + err.message);
   }
-
-  // Multiple files -> ZIP with subfolders
-  const JSZip = (await import('jszip')).default;
-  const zip = new JSZip();
-  for (const f of files) zip.file(f.filename, f.content);
-  const zipBlob = await zip.generateAsync({ type: 'blob' });
-  downloadBlob(zipBlob, `${sanitizeFilename(state.book.title)}_chapters.zip`);
 });
 
 btnDownloadAll.addEventListener('click', async () => {
-  const blobs = state.audioBlobs;
-  if (Object.keys(blobs).length === 0) return;
+  try {
+    const blobs = state.audioBlobs;
+    if (Object.keys(blobs).length === 0) return;
 
-  const JSZip = (await import('jszip')).default;
-  const zip = new JSZip();
-  const chapters = state.book.chapters;
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    const chapters = state.book.chapters;
 
-  for (let i = 0; i < chapters.length; i++) {
-    const prefix = String(i + 1).padStart(3, '0');
-    const safeName = sanitizeFilename(chapters[i].title);
-    if (blobs[i]) zip.file(`${prefix}_${safeName}.mp3`, blobs[i]);
-    zip.file(`${prefix}_${safeName}.md`, chapters[i].markdown);
-    if (chapters[i].translatedMarkdown) {
-      zip.file(`${prefix}_${safeName}_translated.md`, chapters[i].translatedMarkdown);
-      zip.file(`${prefix}_${safeName}_bilingual.md`, buildBilingualMarkdown(chapters[i].markdown, chapters[i].translatedMarkdown));
+    for (let i = 0; i < chapters.length; i++) {
+      const prefix = String(i + 1).padStart(3, '0');
+      const safeName = sanitizeFilename(chapters[i].title);
+      if (blobs[i]) zip.file(`${prefix}_${safeName}.mp3`, blobs[i]);
+      zip.file(`${prefix}_${safeName}.md`, chapters[i].markdown);
+      if (chapters[i].translatedMarkdown) {
+        zip.file(`${prefix}_${safeName}_translated.md`, chapters[i].translatedMarkdown);
+        zip.file(`${prefix}_${safeName}_bilingual.md`, buildBilingualMarkdown(chapters[i].markdown, chapters[i].translatedMarkdown));
+      }
     }
-  }
 
-  const zipBlob = await zip.generateAsync({ type: 'blob' });
-  downloadBlob(zipBlob, `${sanitizeFilename(state.book.title)}.zip`);
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    downloadBlob(zipBlob, `${sanitizeFilename(state.book.title)}.zip`);
+  } catch (err) {
+    alert('Download failed: ' + err.message);
+  }
 });
 
 // ── Progress UI ──

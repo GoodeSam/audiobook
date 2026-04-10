@@ -64,7 +64,8 @@ function convertNode(node) {
     case 'a': {
       const href = node.getAttribute('href');
       const text = children().trim();
-      if (href && !href.startsWith('#')) return `[${text}](${href})`;
+      // Only preserve safe protocols in exported markdown
+      if (href && /^https?:\/\/|^mailto:/i.test(href)) return `[${text}](${href})`;
       return text;
     }
 

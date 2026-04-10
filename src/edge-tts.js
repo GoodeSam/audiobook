@@ -307,6 +307,9 @@ export async function generateChapterAudio(options = {}) {
   } = options;
 
   const segments = buildChapterSegments({ originalText, translatedText, audioMode });
+  if (segments.length === 0 && existingBlobs.length === 0) {
+    throw new Error(`No content to synthesize in "${audioMode}" mode. Translation may be required.`);
+  }
   const total = segments.length;
   const audioBlobs = [...existingBlobs];
 

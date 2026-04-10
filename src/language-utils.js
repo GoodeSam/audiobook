@@ -63,11 +63,10 @@ export function splitByLanguage(text) {
     }
   }
 
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
+  // Iterate by code point to handle non-BMP characters (CJK Extension B+)
+  for (const ch of text) {
     // Digits, whitespace, and punctuation are neutral — they attach to the
     // surrounding language context instead of forcing an English segment.
-    // This prevents "3" in "他有3个苹果" from being routed to the English voice.
     const isNeutral = /[\s\d]/.test(ch) || (!isChinese(ch) && /[^\w]/.test(ch));
 
     if (isNeutral) {
