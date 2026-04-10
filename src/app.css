@@ -298,6 +298,13 @@ body {
   display: flex;
 }
 
+.chapter-view {
+  display: none;
+}
+.chapter-view.visible {
+  display: block;
+}
+
 .chapter-header {
   display: flex;
   align-items: center;

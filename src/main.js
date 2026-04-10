@@ -225,6 +225,7 @@ function selectChapter(idx) {
   contentPlaceholder.hidden = true;
   contentPlaceholder.classList.remove('visible');
   chapterView.hidden = false;
+  chapterView.classList.add('visible');
   chapterTitle.textContent = ch.title;
 
   // Update tabs
@@ -267,6 +268,7 @@ function showPlaceholder() {
   contentPlaceholder.hidden = false;
   contentPlaceholder.classList.add('visible');
   chapterView.hidden = true;
+  chapterView.classList.remove('visible');
 }
 
 // ── Tabs ──
