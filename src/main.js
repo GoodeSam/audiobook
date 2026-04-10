@@ -142,6 +142,8 @@ async function handleFile(file) {
 
     // Reset all state flags (including generating and working)
     resetStateForNewBook(state, book);
+    _renderCache.clear();
+    _previewCache.clear();
 
     // Restore drop zone before switching screens so it's ready if user comes back
     resetDropZone();
@@ -163,11 +165,11 @@ function showReaderScreen() {
 }
 
 btnBack.addEventListener('click', () => {
-  // Cancel any in-progress operations so generating doesn't stay stuck
   cancelGeneration();
   cancelTranslation();
   state.generating = false;
   hideProgress();
+  _renderCache.clear();
 
   readerScreen.classList.remove('active');
   uploadScreen.classList.add('active');
@@ -224,8 +226,12 @@ function cleanupPreview() {
 let _previewPlaying = false;
 let _previewBtn = null;
 const _previewCache = new Map(); // key: `${voice}:${speechRate}:${sampleKey}` → Blob
+const PREVIEW_CACHE_MAX = 10;
 
 async function previewVoice(voice, speechRate, sampleKey, btn) {
+  // Don't preview while generation is active — they share the global WebSocket
+  if (state.generating) return;
+
   if (_previewPlaying && _previewBtn === btn) {
     stopPreview(btn);
     return;
@@ -242,6 +248,11 @@ async function previewVoice(voice, speechRate, sampleKey, btn) {
     let blob = _previewCache.get(cacheKey);
     if (!blob) {
       blob = await synthesizeText(PREVIEW_SAMPLES[sampleKey], { voice, speechRate });
+      if (_previewCache.size >= PREVIEW_CACHE_MAX) {
+        // Evict oldest entry
+        const oldest = _previewCache.keys().next().value;
+        _previewCache.delete(oldest);
+      }
       _previewCache.set(cacheKey, blob);
     }
     _previewUrl = URL.createObjectURL(blob);
@@ -334,6 +345,23 @@ function renderChapterList() {
     icons.innerHTML = iconHtml;
   }
   updateBulkButtons();
+}
+
+/** Update a single chapter row without touching other rows. */
+function updateChapterRow(idx) {
+  const li = chapterList.children[idx];
+  if (!li) return;
+  const ch = state.book.chapters[idx];
+  const icons = li.querySelector('.status-icons');
+  const hasTrCp = !!state.translationCheckpoints[idx];
+  const hasAuCp = !!state.audioCheckpoints[idx];
+  let iconHtml = '';
+  if (ch.translatedMarkdown && !hasTrCp) iconHtml += '<span class="status-icon" title="Translated">🌐</span>';
+  else if (hasTrCp) iconHtml += '<span class="status-icon" title="Translation paused">⏸</span>';
+  if (state.audioBlobs[idx] && !hasAuCp) iconHtml += '<span class="status-icon" title="Audio ready">🔊</span>';
+  else if (hasAuCp) iconHtml += '<span class="status-icon" title="Audio paused">⏸</span>';
+  if (!iconHtml) iconHtml = '<span class="status-icon">📄</span>';
+  icons.innerHTML = iconHtml;
 }
 
 // Event delegation for chapter list — avoids per-row listeners
@@ -742,6 +770,8 @@ async function generateMultipleChapters(indices) {
 
   showProgress('Processing chapters...');
 
+  const failures = [];
+
   try {
     // Phase 1: Translate
     if (toTranslate.length > 0) {
@@ -756,18 +786,24 @@ async function generateMultipleChapters(indices) {
         progressTitle.textContent = `Translating ${i + 1}/${toTranslate.length}: ${ch.title}${tcp ? ' (resuming)' : ''}`;
         resetTranslationState();
 
-        const translated = await translateChapter(ch.markdown, fromLang, toLang, {
-          startIndex: tcp ? tcp.completedIndex : 0,
-          existingTranslations: tcp ? tcp.translatedParagraphs : [],
-          onProgress: (current, paraTotal) => {
-            tracker.advance(i + current / paraTotal);
-          },
-          onCheckpoint: (cpData) => { state.translationCheckpoints[idx] = cpData; },
-        });
-        ch.translatedMarkdown = translated;
-        delete state.translationCheckpoints[idx];
+        try {
+          const translated = await translateChapter(ch.markdown, fromLang, toLang, {
+            startIndex: tcp ? tcp.completedIndex : 0,
+            existingTranslations: tcp ? tcp.translatedParagraphs : [],
+            onProgress: (current, paraTotal) => {
+              tracker.advance(i + current / paraTotal);
+            },
+            onCheckpoint: (cpData) => { state.translationCheckpoints[idx] = cpData; },
+          });
+          ch.translatedMarkdown = translated;
+          delete state.translationCheckpoints[idx];
+          invalidateRenderCache(idx);
+        } catch (err) {
+          if (err.message.includes('cancelled')) throw err;
+          failures.push({ chapter: ch.title, phase: 'translate', error: err.message });
+        }
         tracker.advance(i + 1);
-        renderChapterList();
+        updateChapterRow(idx);
       }
     }
 
@@ -781,30 +817,39 @@ async function generateMultipleChapters(indices) {
         const acp = state.audioCheckpoints[idx];
         progressTitle.textContent = `Generating ${i + 1}/${toGenerate.length}: ${ch.title}${acp ? ' (resuming)' : ''}`;
 
-        const blob = await generateChapterAudio({
-          originalText: ch.markdown,
-          translatedText: ch.translatedMarkdown,
-          audioMode: mode,
-          voiceEn: voiceEnSelect.value,
-          voiceZh: voiceZhSelect.value,
-          speechRateEn: parseInt(speedEnRange.value),
-          speechRateZh: parseInt(speedZhRange.value),
-          startIndex: acp ? acp.completedIndex : 0,
-          existingBlobs: acp ? acp.audioBlobs : [],
-          onProgress: (current, segTotal) => {
-            tracker.advance(i + current / segTotal);
-          },
-          onCheckpoint: (cpData) => { state.audioCheckpoints[idx] = cpData; },
-        });
-
-        state.audioBlobs[idx] = blob;
-        delete state.audioCheckpoints[idx];
+        try {
+          const blob = await generateChapterAudio({
+            originalText: ch.markdown,
+            translatedText: ch.translatedMarkdown,
+            audioMode: mode,
+            voiceEn: voiceEnSelect.value,
+            voiceZh: voiceZhSelect.value,
+            speechRateEn: parseInt(speedEnRange.value),
+            speechRateZh: parseInt(speedZhRange.value),
+            startIndex: acp ? acp.completedIndex : 0,
+            existingBlobs: acp ? acp.audioBlobs : [],
+            onProgress: (current, segTotal) => {
+              tracker.advance(i + current / segTotal);
+            },
+            onCheckpoint: (cpData) => { state.audioCheckpoints[idx] = cpData; },
+          });
+          state.audioBlobs[idx] = blob;
+          delete state.audioCheckpoints[idx];
+        } catch (err) {
+          if (err.message.includes('cancelled')) throw err;
+          failures.push({ chapter: ch.title, phase: 'generate', error: err.message });
+        }
         tracker.advance(i + 1);
-        renderChapterList();
+        updateChapterRow(idx);
       }
     }
 
     updateBulkButtons();
+
+    if (failures.length > 0) {
+      const summary = failures.map(f => `${f.chapter} (${f.phase}): ${f.error}`).join('\n');
+      alert(`${failures.length} chapter(s) had errors:\n${summary}`);
+    }
   } catch (err) {
     if (!err.message.includes('cancelled')) {
       alert('Error: ' + err.message);
