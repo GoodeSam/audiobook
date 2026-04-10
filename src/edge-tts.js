@@ -11,6 +11,7 @@
  */
 
 import { detectLanguage, splitByLanguage } from './language-utils.js';
+import { convertNumbersToChinese } from './number-to-chinese.js';
 
 const EDGE_TTS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
 const EDGE_TTS_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
@@ -52,6 +53,13 @@ async function generateSecMsGec() {
 export async function synthesizeText(text, options = {}) {
   const voice = options.voice || 'en-US-ChristopherNeural';
   const speechRate = options.speechRate || 0;
+
+  // Convert Arabic numerals to Chinese characters for Chinese voices
+  // so TTS reads numbers in Chinese instead of English pronunciation
+  const lang = langFromVoice(voice);
+  if (lang.startsWith('zh')) {
+    text = convertNumbersToChinese(text);
+  }
   const connId = crypto.randomUUID().replace(/-/g, '');
   const requestId = crypto.randomUUID().replace(/-/g, '');
   const gecToken = await generateSecMsGec();
