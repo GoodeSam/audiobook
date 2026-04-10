@@ -50,6 +50,7 @@ const btnDownloadAll = $('btn-download-all');
 const progressOverlay = $('progress-overlay');
 const progressTitle = $('progress-title');
 const progressBar = $('progress-bar');
+const progressPercent = $('progress-percent');
 const progressText = $('progress-text');
 const btnCancel = $('btn-cancel');
 
@@ -357,7 +358,7 @@ async function translateMultipleChapters(indices) {
 
   const tracker = new ProgressTracker([{ name: 'translating', weight: 1.0 }]);
   tracker.onProgress((s) => {
-    progressBar.style.width = `${s.overallPercent}%`;
+    setProgressPercent(s.overallPercent);
     progressText.textContent = tracker.statusText;
   });
 
@@ -437,7 +438,7 @@ async function generateSingleChapter(idx) {
   state.generating = true;
   const tracker = new ProgressTracker([{ name: 'generating', weight: 1.0 }]);
   tracker.onProgress((s) => {
-    progressBar.style.width = `${s.overallPercent}%`;
+    setProgressPercent(s.overallPercent);
     progressText.textContent = s.phase === 'generating'
       ? `Generating: ${s.current} / ${s.total} segments`
       : tracker.statusText;
@@ -494,7 +495,7 @@ async function generateMultipleChapters(indices) {
 
   const tracker = new ProgressTracker(phases);
   tracker.onProgress((s) => {
-    progressBar.style.width = `${s.overallPercent}%`;
+    setProgressPercent(s.overallPercent);
     progressText.textContent = tracker.statusText;
   });
 
@@ -628,14 +629,21 @@ btnDownloadAll.addEventListener('click', async () => {
 function showProgress(title) {
   progressTitle.textContent = title;
   progressBar.style.width = '0%';
+  progressPercent.textContent = '0%';
   progressText.textContent = '';
   progressOverlay.hidden = false;
   progressOverlay.classList.add('visible');
 }
 
+function setProgressPercent(pct) {
+  const rounded = Math.round(pct);
+  progressBar.style.width = `${rounded}%`;
+  progressPercent.textContent = `${rounded}%`;
+}
+
 function updateProgress(current, total, text) {
   const pct = total > 0 ? (current / total) * 100 : 0;
-  progressBar.style.width = `${pct}%`;
+  setProgressPercent(pct);
   progressText.textContent = text || `${current} / ${total}`;
 }
 
