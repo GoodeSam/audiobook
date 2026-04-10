@@ -1,0 +1,44 @@
+/**
+ * Bilingual view builder.
+ *
+ * Creates a paragraph-by-paragraph interleaved view of original and
+ * translated text for side-by-side reading.
+ */
+
+/**
+ * Build bilingual markdown with original and translated paragraphs interleaved.
+ *
+ * @param {string} original - Original chapter markdown.
+ * @param {string} translated - Translated chapter markdown.
+ * @returns {string} Interleaved markdown.
+ */
+export function buildBilingualMarkdown(original, translated) {
+  const origParas = splitParas(original);
+  const transParas = splitParas(translated);
+
+  if (origParas.length === 0 && transParas.length === 0) return '';
+
+  const maxLen = Math.max(origParas.length, transParas.length);
+  const lines = [];
+
+  for (let i = 0; i < maxLen; i++) {
+    const orig = i < origParas.length ? origParas[i] : null;
+    const trans = i < transParas.length ? transParas[i] : null;
+
+    if (orig) lines.push(orig);
+    if (trans && !isHeading(trans)) lines.push(trans);
+
+    lines.push(''); // blank line separator
+  }
+
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function splitParas(text) {
+  if (!text || !text.trim()) return [];
+  return text.split(/\n\n+/).filter(p => p.trim());
+}
+
+function isHeading(para) {
+  return /^#{1,6}\s+/.test(para.trim());
+}

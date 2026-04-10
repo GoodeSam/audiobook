@@ -10,6 +10,7 @@ import { generateChapterAudio, cancelGeneration, synthesizeText } from './edge-t
 import { translateChapter, cancelTranslation, resetTranslationState } from './ms-translator.js';
 import { sanitizeFilename, exportMultipleChapters } from './chapter-export.js';
 import { ProgressTracker } from './progress-tracker.js';
+import { buildBilingualMarkdown } from './bilingual-view.js';
 import { createAppState, resetStateForNewBook, resetStateOnError } from './app-state.js';
 
 // ── State ──
@@ -331,8 +332,9 @@ function showPlaceholder() {
 
 function updateTabs() {
   const ch = state.book.chapters[state.activeChapter];
-  const translatedTab = document.querySelector('.tab-btn[data-tab="translated"]');
-  translatedTab.classList.toggle('has-content', !!ch?.translatedMarkdown);
+  const hasTranslation = !!ch?.translatedMarkdown;
+  document.querySelector('.tab-btn[data-tab="translated"]').classList.toggle('has-content', hasTranslation);
+  document.querySelector('.tab-btn[data-tab="bilingual"]').classList.toggle('has-content', hasTranslation);
 }
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -347,10 +349,17 @@ function showTab(tab) {
   const ch = state.book.chapters[state.activeChapter];
   if (!ch) return;
 
+  const notTranslatedMsg = '<p style="color: var(--muted)">Not yet translated. Click "Translate" to translate this chapter.</p>';
+
   if (tab === 'translated' && ch.translatedMarkdown) {
     chapterMarkdown.innerHTML = renderMarkdownHtml(ch.translatedMarkdown);
   } else if (tab === 'translated') {
-    chapterMarkdown.innerHTML = '<p style="color: var(--muted)">Not yet translated. Click "Translate" to translate this chapter.</p>';
+    chapterMarkdown.innerHTML = notTranslatedMsg;
+  } else if (tab === 'bilingual' && ch.translatedMarkdown) {
+    const bilingual = buildBilingualMarkdown(ch.markdown, ch.translatedMarkdown);
+    chapterMarkdown.innerHTML = renderMarkdownHtml(bilingual);
+  } else if (tab === 'bilingual') {
+    chapterMarkdown.innerHTML = notTranslatedMsg;
   } else {
     chapterMarkdown.innerHTML = renderMarkdownHtml(ch.markdown);
   }
