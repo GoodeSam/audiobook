@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <!-- Background -->
+  <rect width="192" height="192" rx="32" fill="#4a6fa5"/>
+  <!-- Open book -->
+  <path d="M36 56c0-4 2-6 6-6 14 0 26 4 54 14v80c-28-10-40-12-54-12-4 0-6-2-6-6V56z" fill="#fff" opacity="0.9"/>
+  <path d="M156 56c0-4-2-6-6-6-14 0-26 4-54 14v80c28-10 40-12 54-12 4 0 6-2 6-6V56z" fill="#fff" opacity="0.7"/>
+  <!-- Spine -->
+  <path d="M96 64v80" stroke="#4a6fa5" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
+  <!-- Audio waves (right page) -->
+  <circle cx="126" cy="96" r="4" fill="#4a6fa5"/>
+  <path d="M134 88a12 12 0 010 16" stroke="#4a6fa5" stroke-width="3" stroke-linecap="round" fill="none"/>
+  <path d="M140 82a22 22 0 010 28" stroke="#4a6fa5" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.6"/>
+  <path d="M146 76a32 32 0 010 40" stroke="#4a6fa5" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.3"/>
+  <!-- Text lines (left page) -->
+  <path d="M50 82h32M50 94h26M50 106h30M50 118h24" stroke="#4a6fa5" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/>
+</svg>

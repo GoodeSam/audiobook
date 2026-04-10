@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Open book left page -->
+  <path d="M8 14c0-2 1-4 4-4 6 0 13 3 20 7v36c-7-3-14-5-20-5-3 0-4-2-4-4V14z" fill="#4a6fa5"/>
+  <!-- Open book right page -->
+  <path d="M56 14c0-2-1-4-4-4-6 0-13 3-20 7v36c7-3 14-5 20-5 3 0 4-2 4-4V14z" fill="#3a5a8a"/>
+  <!-- Spine -->
+  <line x1="32" y1="17" x2="32" y2="53" stroke="#f5f0e8" stroke-width="1" opacity="0.4"/>
+  <!-- Text lines on left -->
+  <line x1="14" y1="24" x2="26" y2="24" stroke="#f5f0e8" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+  <line x1="14" y1="30" x2="24" y2="30" stroke="#f5f0e8" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+  <line x1="14" y1="36" x2="26" y2="36" stroke="#f5f0e8" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+  <!-- Speaker + waves on right -->
+  <circle cx="41" cy="32" r="3" fill="#f5f0e8"/>
+  <path d="M47 26a10 10 0 010 12" stroke="#f5f0e8" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <path d="M51 22a16 16 0 010 20" stroke="#f5f0e8" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.5"/>
+</svg>
