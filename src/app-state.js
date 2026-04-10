@@ -20,6 +20,8 @@ export function createAppState() {
     generating: false,
     working: false,         // true while handleFile is parsing an EPUB
     selectedChapters: new Set(),
+    translationCheckpoints: {},  // chapterIndex -> { completedIndex, translatedParagraphs, totalParagraphs }
+    audioCheckpoints: {},        // chapterIndex -> { completedIndex, audioBlobs, totalSegments }
   };
 }
 
@@ -38,6 +40,8 @@ export function resetStateForNewBook(state, book) {
   state.generating = false;
   state.working = false;
   state.selectedChapters = new Set();
+  state.translationCheckpoints = {};
+  state.audioCheckpoints = {};
 }
 
 /**

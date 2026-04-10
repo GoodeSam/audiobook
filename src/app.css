@@ -442,6 +442,13 @@ body {
 .action-btn.done:hover {
   background: var(--success);
 }
+.action-btn.resume {
+  background: var(--warning);
+  border-color: var(--warning);
+}
+.action-btn.resume:hover {
+  background: #e08a0b;
+}
 
 .cancel-btn {
   background: var(--danger);

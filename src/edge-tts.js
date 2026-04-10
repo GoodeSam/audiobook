@@ -262,6 +262,24 @@ export function buildChapterSegments({ originalText, translatedText, audioMode }
  * @param {Function} [options.onProgress] - Progress callback(current, total).
  * @returns {Promise<Blob>} Concatenated MP3 blob.
  */
+/**
+ * Generate audio for a full chapter using dual voice/speed settings.
+ * Supports resumption via options.startIndex and options.existingBlobs.
+ *
+ * @param {object} options
+ * @param {string} options.originalText - Original chapter markdown.
+ * @param {string} [options.translatedText] - Translated chapter markdown.
+ * @param {'original'|'translated'|'bilingual'} [options.audioMode='original']
+ * @param {string} [options.voiceEn] - English voice.
+ * @param {string} [options.voiceZh] - Chinese voice.
+ * @param {number} [options.speechRateEn=0] - English speech rate.
+ * @param {number} [options.speechRateZh=0] - Chinese speech rate.
+ * @param {Function} [options.onProgress] - Progress callback(current, total).
+ * @param {number} [options.startIndex=0] - Segment index to resume from.
+ * @param {Blob[]} [options.existingBlobs=[]] - Already-synthesized blobs.
+ * @param {Function} [options.onCheckpoint] - Called with checkpoint data after each segment.
+ * @returns {Promise<Blob>} Concatenated MP3 blob.
+ */
 export async function generateChapterAudio(options = {}) {
   _cancelled = false;
   const {
@@ -273,13 +291,16 @@ export async function generateChapterAudio(options = {}) {
     speechRateEn = 0,
     speechRateZh = 0,
     onProgress,
+    startIndex = 0,
+    existingBlobs = [],
+    onCheckpoint,
   } = options;
 
   const segments = buildChapterSegments({ originalText, translatedText, audioMode });
   const total = segments.length;
-  const audioBlobs = [];
+  const audioBlobs = [...existingBlobs];
 
-  for (let i = 0; i < segments.length; i++) {
+  for (let i = startIndex; i < segments.length; i++) {
     if (_cancelled) throw new Error('Audio generation cancelled');
 
     const seg = segments[i];
@@ -299,6 +320,7 @@ export async function generateChapterAudio(options = {}) {
 
     audioBlobs.push(blob);
     if (onProgress) onProgress(i + 1, total);
+    if (onCheckpoint) onCheckpoint({ completedIndex: i + 1, totalSegments: total, audioBlobs: [...audioBlobs] });
   }
 
   return new Blob(audioBlobs, { type: 'audio/mpeg' });

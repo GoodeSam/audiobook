@@ -83,24 +83,42 @@ function shouldSkipParagraph(para) {
 /**
  * Translate a full markdown chapter paragraph by paragraph.
  * Headings, images, and rules are preserved untranslated.
+ * Supports resumption from a checkpoint via options.startIndex and
+ * options.existingTranslations.
  *
  * @param {string} markdown - Chapter markdown text.
  * @param {string} from - Source language code.
  * @param {string} to - Target language code.
- * @param {object} options - { fetchFn, onProgress(current, total) }
+ * @param {object} options
+ * @param {Function} [options.fetchFn] - Fetch implementation.
+ * @param {Function} [options.onProgress] - Progress callback(current, total).
+ * @param {number} [options.startIndex=0] - Paragraph index to resume from.
+ * @param {string[]} [options.existingTranslations=[]] - Already-translated paragraphs.
+ * @param {Function} [options.onCheckpoint] - Called with checkpoint data after each paragraph.
  * @returns {Promise<string>} Translated markdown.
  */
 export async function translateChapter(markdown, from, to, options = {}) {
   _cancelled = false;
-  const { fetchFn = fetch, onProgress } = options;
+  const {
+    fetchFn = fetch,
+    onProgress,
+    startIndex = 0,
+    existingTranslations = [],
+    onCheckpoint,
+  } = options;
 
   const paragraphs = markdown.split(/\n\n+/).filter(p => p.trim());
   const total = paragraphs.filter(p => !shouldSkipParagraph(p)).length;
-  const translated = [];
-  let progress = 0;
+  const translated = [...existingTranslations];
+  // Count how many translatable paragraphs are already done
+  let progress = existingTranslations.filter(
+    (_, i) => i < paragraphs.length && !shouldSkipParagraph(paragraphs[i])
+  ).length;
 
-  for (const para of paragraphs) {
+  for (let i = startIndex; i < paragraphs.length; i++) {
     if (_cancelled) throw new Error('Translation cancelled');
+
+    const para = paragraphs[i];
 
     if (shouldSkipParagraph(para)) {
       translated.push(para);
@@ -111,6 +129,7 @@ export async function translateChapter(markdown, from, to, options = {}) {
     translated.push(result);
     progress++;
     if (onProgress) onProgress(progress, total);
+    if (onCheckpoint) onCheckpoint({ completedIndex: i + 1, translatedParagraphs: [...translated], totalParagraphs: paragraphs.length });
 
     if (_cancelled) throw new Error('Translation cancelled');
   }

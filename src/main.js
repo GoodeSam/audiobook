@@ -264,9 +264,13 @@ function renderChapterList() {
 
     const icons = document.createElement('span');
     icons.className = 'status-icons';
-    if (ch.translatedMarkdown) icons.innerHTML += '<span class="status-icon" title="Translated">🌐</span>';
-    if (state.audioBlobs[idx]) icons.innerHTML += '<span class="status-icon" title="Audio ready">🔊</span>';
-    if (!ch.translatedMarkdown && !state.audioBlobs[idx]) icons.innerHTML = '<span class="status-icon">📄</span>';
+    const hasTrCp = !!state.translationCheckpoints[idx];
+    const hasAuCp = !!state.audioCheckpoints[idx];
+    if (ch.translatedMarkdown && !hasTrCp) icons.innerHTML += '<span class="status-icon" title="Translated">🌐</span>';
+    else if (hasTrCp) icons.innerHTML += '<span class="status-icon" title="Translation paused">⏸</span>';
+    if (state.audioBlobs[idx] && !hasAuCp) icons.innerHTML += '<span class="status-icon" title="Audio ready">🔊</span>';
+    else if (hasAuCp) icons.innerHTML += '<span class="status-icon" title="Audio paused">⏸</span>';
+    if (!ch.translatedMarkdown && !state.audioBlobs[idx] && !hasTrCp && !hasAuCp) icons.innerHTML = '<span class="status-icon">📄</span>';
 
     const name = document.createElement('span');
     name.className = 'chapter-name';
@@ -328,23 +332,37 @@ function updateChapterButtons(idx) {
   const ch = state.book.chapters[idx];
   const hasTranslation = !!ch.translatedMarkdown;
   const hasAudio = !!state.audioBlobs[idx];
+  const hasTranslationCp = !!state.translationCheckpoints[idx];
+  const hasAudioCp = !!state.audioCheckpoints[idx];
 
   // Translate button
-  if (hasTranslation) {
+  if (hasTranslation && !hasTranslationCp) {
     btnTranslateChapter.textContent = 'Translated \u2713';
     btnTranslateChapter.classList.add('done');
+    btnTranslateChapter.classList.remove('resume');
+  } else if (hasTranslationCp) {
+    const cp = state.translationCheckpoints[idx];
+    btnTranslateChapter.textContent = `Resume (${cp.completedIndex}/${cp.totalParagraphs})`;
+    btnTranslateChapter.classList.remove('done');
+    btnTranslateChapter.classList.add('resume');
   } else {
     btnTranslateChapter.textContent = 'Translate';
-    btnTranslateChapter.classList.remove('done');
+    btnTranslateChapter.classList.remove('done', 'resume');
   }
 
   // Generate MP3 button
-  if (hasAudio) {
+  if (hasAudio && !hasAudioCp) {
     btnGenerateChapter.textContent = 'MP3 Ready \u2713';
     btnGenerateChapter.classList.add('done');
+    btnGenerateChapter.classList.remove('resume');
+  } else if (hasAudioCp) {
+    const cp = state.audioCheckpoints[idx];
+    btnGenerateChapter.textContent = `Resume (${cp.completedIndex}/${cp.totalSegments})`;
+    btnGenerateChapter.classList.remove('done');
+    btnGenerateChapter.classList.add('resume');
   } else {
     btnGenerateChapter.textContent = 'Generate MP3';
-    btnGenerateChapter.classList.remove('done');
+    btnGenerateChapter.classList.remove('done', 'resume');
   }
 
   // Download buttons
@@ -407,8 +425,9 @@ btnSelectAll.addEventListener('click', () => {
 
 btnTranslateChapter.addEventListener('click', async () => {
   if (state.activeChapter === null || state.generating) return;
-  // Skip if already translated
-  if (state.book.chapters[state.activeChapter].translatedMarkdown) return;
+  // Skip if already fully translated (no checkpoint means complete)
+  const ch = state.book.chapters[state.activeChapter];
+  if (ch.translatedMarkdown && !state.translationCheckpoints[state.activeChapter]) return;
   await translateSingleChapter(state.activeChapter);
 });
 
@@ -422,19 +441,30 @@ async function translateSingleChapter(idx) {
   const toLang = translateLangSelect.value;
   const fromLang = detectSourceLang();
   state.generating = true;
-  showProgress('Translating: ' + ch.title);
+
+  // Resume from checkpoint if available
+  const cp = state.translationCheckpoints[idx];
+  const resuming = cp && cp.completedIndex > 0;
+  showProgress(resuming
+    ? `Resuming translation: ${ch.title} (from ${cp.completedIndex})`
+    : `Translating: ${ch.title}`);
 
   try {
     resetTranslationState();
     const translated = await translateChapter(ch.markdown, fromLang, toLang, {
+      startIndex: cp ? cp.completedIndex : 0,
+      existingTranslations: cp ? cp.translatedParagraphs : [],
       onProgress: (current, total) => updateProgress(current, total, `Translating: ${current} / ${total} paragraphs`),
+      onCheckpoint: (cpData) => { state.translationCheckpoints[idx] = cpData; },
     });
     ch.translatedMarkdown = translated;
+    delete state.translationCheckpoints[idx]; // Clear checkpoint on success
     renderChapterList();
     updateTabs();
     showTab(state.activeTab);
     if (state.activeChapter === idx) updateChapterButtons(idx);
   } catch (err) {
+    // Checkpoint is preserved in state.translationCheckpoints[idx] for resume
     if (!err.message.includes('cancelled')) {
       alert('Translation error: ' + err.message);
     }
@@ -509,8 +539,8 @@ function detectSourceLang() {
 
 btnGenerateChapter.addEventListener('click', async () => {
   if (state.activeChapter === null || state.generating) return;
-  // Skip if already generated
-  if (state.audioBlobs[state.activeChapter]) return;
+  // Skip if already fully generated (no checkpoint means complete)
+  if (state.audioBlobs[state.activeChapter] && !state.audioCheckpoints[state.activeChapter]) return;
   await generateSingleChapter(state.activeChapter);
 });
 
@@ -555,10 +585,15 @@ async function generateSingleChapter(idx) {
       : tracker.statusText;
   });
 
-  showProgress('Generating: ' + ch.title);
+  // Resume from checkpoint if available
+  const acp = state.audioCheckpoints[idx];
+  const resumingAudio = acp && acp.completedIndex > 0;
+  showProgress(resumingAudio
+    ? `Resuming audio: ${ch.title} (from segment ${acp.completedIndex})`
+    : `Generating: ${ch.title}`);
 
   try {
-    tracker.startPhase('generating', 1); // Will be updated inside generateChapterAudio
+    tracker.startPhase('generating', 1);
     const blob = await generateChapterAudio({
       originalText: ch.markdown,
       translatedText: ch.translatedMarkdown,
@@ -567,16 +602,21 @@ async function generateSingleChapter(idx) {
       voiceZh: voiceZhSelect.value,
       speechRateEn: parseInt(speedEnRange.value),
       speechRateZh: parseInt(speedZhRange.value),
+      startIndex: acp ? acp.completedIndex : 0,
+      existingBlobs: acp ? acp.audioBlobs : [],
       onProgress: (current, total) => {
         tracker.startPhase('generating', total);
         tracker.advance(current);
       },
+      onCheckpoint: (cpData) => { state.audioCheckpoints[idx] = cpData; },
     });
 
     state.audioBlobs[idx] = blob;
+    delete state.audioCheckpoints[idx]; // Clear checkpoint on success
     renderChapterList();
     selectChapter(idx);
   } catch (err) {
+    // Checkpoint is preserved in state.audioCheckpoints[idx] for resume
     if (!err.message.includes('cancelled')) {
       alert('Error generating audio: ' + err.message);
     }
