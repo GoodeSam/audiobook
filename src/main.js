@@ -244,6 +244,8 @@ btnPreviewZh.addEventListener('click', () => {
 
 // ── Chapter list ──
 
+let _lastCheckedIdx = null; // For Shift+click range selection
+
 function renderChapterList() {
   chapterList.innerHTML = '';
   state.book.chapters.forEach((ch, idx) => {
@@ -255,10 +257,9 @@ function renderChapterList() {
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = state.selectedChapters.has(idx);
-    cb.addEventListener('change', (e) => {
+    cb.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (cb.checked) state.selectedChapters.add(idx);
-      else state.selectedChapters.delete(idx);
+      handleCheckboxClick(idx, cb.checked, e.shiftKey);
     });
 
     const icons = document.createElement('span');
@@ -281,6 +282,23 @@ function renderChapterList() {
     chapterList.appendChild(li);
   });
   updateBulkButtons();
+}
+
+function handleCheckboxClick(idx, checked, shiftKey) {
+  if (shiftKey && _lastCheckedIdx !== null) {
+    // Range select: toggle all between last checked and current
+    const from = Math.min(_lastCheckedIdx, idx);
+    const to = Math.max(_lastCheckedIdx, idx);
+    for (let i = from; i <= to; i++) {
+      if (checked) state.selectedChapters.add(i);
+      else state.selectedChapters.delete(i);
+    }
+    renderChapterList(); // Re-render to update all checkboxes
+  } else {
+    if (checked) state.selectedChapters.add(idx);
+    else state.selectedChapters.delete(idx);
+  }
+  _lastCheckedIdx = idx;
 }
 
 function selectChapter(idx) {
@@ -500,6 +518,23 @@ btnGenerateSelected.addEventListener('click', async () => {
   if (state.generating || state.selectedChapters.size === 0) return;
   await generateMultipleChapters([...state.selectedChapters].sort((a, b) => a - b));
 });
+
+// ── Translate & Generate combined ──
+
+const btnTranslateGenerate = $('btn-translate-generate');
+
+async function translateAndGenerateSelected() {
+  if (state.generating || !state.book) return;
+  if (state.selectedChapters.size === 0) {
+    // If nothing selected, select all
+    state.selectedChapters = new Set(state.book.chapters.map((_, i) => i));
+    renderChapterList();
+  }
+  const indices = [...state.selectedChapters].sort((a, b) => a - b);
+  await generateMultipleChapters(indices); // This already translates if needed based on audio mode
+}
+
+btnTranslateGenerate.addEventListener('click', () => translateAndGenerateSelected());
 
 async function generateSingleChapter(idx) {
   const ch = state.book.chapters[idx];
@@ -791,3 +826,22 @@ function renderMarkdownHtml(md) {
 
   return `<p>${html}</p>`;
 }
+
+// ── Keyboard shortcuts ──
+
+document.addEventListener('keydown', (e) => {
+  // Ctrl+Shift+G (or Cmd+Shift+G on Mac): Translate & Generate selected
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'G') {
+    e.preventDefault();
+    translateAndGenerateSelected();
+  }
+  // Ctrl+Shift+A (or Cmd+Shift+A): Select all chapters
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') {
+    e.preventDefault();
+    if (state.book) {
+      const allSelected = state.selectedChapters.size === state.book.chapters.length;
+      state.selectedChapters = allSelected ? new Set() : new Set(state.book.chapters.map((_, i) => i));
+      renderChapterList();
+    }
+  }
+});
