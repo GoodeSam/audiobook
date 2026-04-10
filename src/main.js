@@ -5,6 +5,7 @@
  */
 
 import { parseEPUB } from './epub-parser.js';
+import { parsePDF } from './pdf-parser.js';
 import { htmlToMarkdown, cleanMarkdown } from './html-to-markdown.js';
 import { generateChapterAudio, cancelGeneration, synthesizeText } from './edge-tts.js';
 import { translateChapter, cancelTranslation, resetTranslationState } from './ms-translator.js';
@@ -60,9 +61,9 @@ const btnCancel = $('btn-cancel');
 
 const DROP_ZONE_DEFAULT = `
   <div class="drop-icon">📖</div>
-  <p>Drag & drop an EPUB file here</p>
+  <p>Drag & drop an EPUB or PDF file here</p>
   <p class="or">or</p>
-  <label class="file-btn">Choose File<input type="file" accept=".epub" hidden></label>
+  <label class="file-btn">Choose File<input type="file" accept=".epub,.pdf" hidden></label>
 `;
 
 function resetDropZone(errorMsg) {
@@ -72,7 +73,7 @@ function resetDropZone(errorMsg) {
       <div class="drop-icon">📖</div>
       <p style="color: var(--danger)">Error: ${safe}</p>
       <p class="or">Try another file</p>
-      <label class="file-btn">Choose File<input type="file" accept=".epub" hidden></label>
+      <label class="file-btn">Choose File<input type="file" accept=".epub,.pdf" hidden></label>
     `;
   } else {
     dropZone.innerHTML = DROP_ZONE_DEFAULT;
@@ -92,7 +93,8 @@ dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
   dropZone.classList.remove('drag-over');
   const file = e.dataTransfer.files[0];
-  if (file?.name.toLowerCase().endsWith('.epub')) handleFile(file);
+  const name = file?.name.toLowerCase() || '';
+  if (name.endsWith('.epub') || name.endsWith('.pdf')) handleFile(file);
 });
 
 // Use event delegation so it works after innerHTML replacements.
@@ -131,13 +133,24 @@ async function handleFile(file) {
     cancelTranslation();
     hideProgress();
 
-    dropZone.innerHTML = '<p>Parsing EPUB...</p>';
-    const book = await parseEPUB(file);
+    const isPDF = file.name.toLowerCase().endsWith('.pdf');
+    dropZone.innerHTML = `<p>Parsing ${isPDF ? 'PDF' : 'EPUB'}...</p>`;
 
-    for (const ch of book.chapters) {
-      ch.markdown = cleanMarkdown(htmlToMarkdown(ch.html));
-      ch.translatedMarkdown = null;
-      delete ch.html; // Free memory — html is no longer needed after markdown conversion
+    let book;
+    if (isPDF) {
+      book = await parsePDF(file);
+      // PDF parser returns markdown directly — just clean it
+      for (const ch of book.chapters) {
+        ch.markdown = cleanMarkdown(ch.markdown);
+        ch.translatedMarkdown = null;
+      }
+    } else {
+      book = await parseEPUB(file);
+      for (const ch of book.chapters) {
+        ch.markdown = cleanMarkdown(htmlToMarkdown(ch.html));
+        ch.translatedMarkdown = null;
+        delete ch.html;
+      }
     }
 
     // Reset all state flags (including generating and working)
