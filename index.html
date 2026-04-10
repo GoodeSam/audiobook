@@ -57,10 +57,13 @@
           </select>
           <button id="btn-preview-en" class="preview-btn" title="Preview this voice">&#9654;</button>
         </div>
-        <label class="speed-control">
-          Speed: <input type="range" id="speed-en-range" min="-50" max="100" value="0" step="10">
+        <div class="speed-control">
+          Speed:
+          <button class="speed-btn" data-target="speed-en-range" data-delta="-5">-</button>
+          <input type="range" id="speed-en-range" min="-50" max="100" value="0" step="5">
+          <button class="speed-btn" data-target="speed-en-range" data-delta="5">+</button>
           <span id="speed-en-label">0%</span>
-        </label>
+        </div>
       </div>
 
       <div class="setting-group">
@@ -82,10 +85,13 @@
           </select>
           <button id="btn-preview-zh" class="preview-btn" title="Preview this voice">&#9654;</button>
         </div>
-        <label class="speed-control">
-          Speed: <input type="range" id="speed-zh-range" min="-50" max="100" value="0" step="10">
+        <div class="speed-control">
+          Speed:
+          <button class="speed-btn" data-target="speed-zh-range" data-delta="-5">-</button>
+          <input type="range" id="speed-zh-range" min="-50" max="100" value="0" step="5">
+          <button class="speed-btn" data-target="speed-zh-range" data-delta="5">+</button>
           <span id="speed-zh-label">0%</span>
-        </label>
+        </div>
       </div>
 
       <div class="setting-group">

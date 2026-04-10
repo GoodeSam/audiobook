@@ -166,13 +166,25 @@ btnBack.addEventListener('click', () => {
 
 // ── Speed controls ──
 
-speedEnRange.addEventListener('input', () => {
-  const v = speedEnRange.value;
-  speedEnLabel.textContent = `${v >= 0 ? '+' : ''}${v}%`;
-});
-speedZhRange.addEventListener('input', () => {
-  const v = speedZhRange.value;
-  speedZhLabel.textContent = `${v >= 0 ? '+' : ''}${v}%`;
+function updateSpeedLabel(range, label) {
+  const v = parseInt(range.value);
+  label.textContent = `${v >= 0 ? '+' : ''}${v}%`;
+}
+
+speedEnRange.addEventListener('input', () => updateSpeedLabel(speedEnRange, speedEnLabel));
+speedZhRange.addEventListener('input', () => updateSpeedLabel(speedZhRange, speedZhLabel));
+
+// +/- buttons: adjust speed by 5% per click, clamped to range min/max
+document.querySelectorAll('.speed-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const range = $(btn.dataset.target);
+    if (!range) return;
+    const delta = parseInt(btn.dataset.delta);
+    const min = parseInt(range.min);
+    const max = parseInt(range.max);
+    range.value = Math.max(min, Math.min(max, parseInt(range.value) + delta));
+    range.dispatchEvent(new Event('input'));
+  });
 });
 
 // ── Voice preview ──
