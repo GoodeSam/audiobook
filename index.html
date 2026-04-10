@@ -14,7 +14,7 @@
     <div class="upload-container">
       <h1>EPUB to Audiobook</h1>
       <p class="subtitle">Upload an EPUB or PDF book to extract chapters as Markdown, translate, and convert to MP3</p>
-      <div id="drop-zone" class="drop-zone" role="button" tabindex="0" aria-label="Upload EPUB file">
+      <div id="drop-zone" class="drop-zone" role="button" tabindex="0" aria-label="Upload EPUB or PDF file">
         <div class="drop-icon">📖</div>
         <p>Drag & drop an EPUB or PDF file here</p>
         <p class="or">or</p>
@@ -31,96 +31,105 @@
     <header class="toolbar">
       <button id="btn-back" class="tool-btn" title="Back to upload">← Back</button>
       <h2 id="book-title" class="book-title">Book Title</h2>
+      <!-- Config summary card — shows current settings at a glance -->
+      <div id="config-summary" class="config-summary">
+        <span id="summary-mode" class="summary-tag">Bilingual</span>
+        <span id="summary-lang" class="summary-tag">→ Chinese</span>
+        <button id="btn-toggle-settings" class="tool-btn" title="Toggle settings">Settings ▾</button>
+      </div>
     </header>
 
-    <!-- Settings Bar -->
-    <div class="settings-bar">
-      <!-- Voice Settings -->
-      <div class="setting-group">
-        <label class="setting-label" for="voice-en-select">English Voice</label>
-        <div class="voice-row">
-          <select id="voice-en-select">
-            <optgroup label="US English">
-              <option value="en-US-AriaNeural">Aria (Female)</option>
-              <option value="en-US-GuyNeural">Guy (Male)</option>
-              <option value="en-US-JennyNeural">Jenny (Female)</option>
-              <option value="en-US-ChristopherNeural" selected>Christopher (Male)</option>
-              <option value="en-US-AnaNeural">Ana (Female)</option>
-              <option value="en-US-BrandonNeural">Brandon (Male)</option>
-            </optgroup>
-            <optgroup label="UK English">
-              <option value="en-GB-SoniaNeural">Sonia (Female)</option>
-              <option value="en-GB-RyanNeural">Ryan (Male)</option>
-            </optgroup>
-            <optgroup label="Australian English">
-              <option value="en-AU-NatashaNeural">Natasha (Female)</option>
-              <option value="en-AU-WilliamNeural">William (Male)</option>
-            </optgroup>
+    <!-- Settings Panel — collapsible, basic visible by default -->
+    <div id="settings-panel" class="settings-panel">
+      <div class="settings-basic">
+        <div class="setting-group">
+          <label class="setting-label" for="audio-mode-select">Audio Mode</label>
+          <select id="audio-mode-select">
+            <option value="original">Original</option>
+            <option value="translated">Translated</option>
+            <option value="bilingual" selected>Bilingual (Original + Translated)</option>
           </select>
-          <button id="btn-preview-en" class="preview-btn" title="Preview this voice">&#9654;</button>
         </div>
-        <div class="speed-control">
-          Speed:
-          <button class="speed-btn" data-target="speed-en-range" data-delta="-5">-</button>
-          <input type="range" id="speed-en-range" min="-50" max="100" value="-5" step="5" aria-label="English speech speed">
-          <button class="speed-btn" data-target="speed-en-range" data-delta="5">+</button>
-          <span id="speed-en-label">-5%</span>
-        </div>
-      </div>
-
-      <div class="setting-group">
-        <label class="setting-label" for="voice-zh-select">Chinese Voice</label>
-        <div class="voice-row">
-          <select id="voice-zh-select">
-            <optgroup label="Mandarin (Mainland)">
-              <option value="zh-CN-XiaoxiaoNeural">Xiaoxiao (Female)</option>
-              <option value="zh-CN-YunxiNeural">Yunxi (Male)</option>
-              <option value="zh-CN-XiaoyiNeural">Xiaoyi (Female)</option>
-              <option value="zh-CN-YunjianNeural">Yunjian (Male)</option>
-              <option value="zh-CN-XiaochenNeural">Xiaochen (Female)</option>
-              <option value="zh-CN-YunyangNeural" selected>Yunyang (Male)</option>
-            </optgroup>
-            <optgroup label="Mandarin (Taiwan)">
-              <option value="zh-TW-HsiaoChenNeural">HsiaoChen (Female)</option>
-              <option value="zh-TW-YunJheNeural">YunJhe (Male)</option>
-            </optgroup>
+        <div class="setting-group">
+          <label class="setting-label" for="translate-lang-select">Translate To</label>
+          <select id="translate-lang-select">
+            <option value="zh-Hans">Chinese (Simplified)</option>
+            <option value="zh-Hant">Chinese (Traditional)</option>
+            <option value="en">English</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="pt">Portuguese</option>
+            <option value="ru">Russian</option>
+            <option value="ar">Arabic</option>
           </select>
-          <button id="btn-preview-zh" class="preview-btn" title="Preview this voice">&#9654;</button>
-        </div>
-        <div class="speed-control">
-          Speed:
-          <button class="speed-btn" data-target="speed-zh-range" data-delta="-5">-</button>
-          <input type="range" id="speed-zh-range" min="-50" max="100" value="0" step="5" aria-label="Chinese speech speed">
-          <button class="speed-btn" data-target="speed-zh-range" data-delta="5">+</button>
-          <span id="speed-zh-label">0%</span>
         </div>
       </div>
-
-      <div class="setting-group">
-        <label class="setting-label" for="audio-mode-select">Audio Mode</label>
-        <select id="audio-mode-select">
-          <option value="original">Original</option>
-          <option value="translated">Translated</option>
-          <option value="bilingual" selected>Bilingual (Original + Translated)</option>
-        </select>
-      </div>
-
-      <div class="setting-group">
-        <label class="setting-label" for="translate-lang-select">Translate To</label>
-        <select id="translate-lang-select">
-          <option value="zh-Hans">Chinese (Simplified)</option>
-          <option value="zh-Hant">Chinese (Traditional)</option>
-          <option value="en">English</option>
-          <option value="ja">Japanese</option>
-          <option value="ko">Korean</option>
-          <option value="es">Spanish</option>
-          <option value="fr">French</option>
-          <option value="de">German</option>
-          <option value="pt">Portuguese</option>
-          <option value="ru">Russian</option>
-          <option value="ar">Arabic</option>
-        </select>
-      </div>
+      <details id="settings-advanced" class="settings-advanced">
+        <summary>Voice &amp; Speed Settings</summary>
+        <div class="settings-advanced-grid">
+          <div class="setting-group">
+            <label class="setting-label" for="voice-en-select">English Voice</label>
+            <div class="voice-row">
+              <select id="voice-en-select">
+                <optgroup label="US English">
+                  <option value="en-US-AriaNeural">Aria (Female)</option>
+                  <option value="en-US-GuyNeural">Guy (Male)</option>
+                  <option value="en-US-JennyNeural">Jenny (Female)</option>
+                  <option value="en-US-ChristopherNeural" selected>Christopher (Male)</option>
+                  <option value="en-US-AnaNeural">Ana (Female)</option>
+                  <option value="en-US-BrandonNeural">Brandon (Male)</option>
+                </optgroup>
+                <optgroup label="UK English">
+                  <option value="en-GB-SoniaNeural">Sonia (Female)</option>
+                  <option value="en-GB-RyanNeural">Ryan (Male)</option>
+                </optgroup>
+                <optgroup label="Australian English">
+                  <option value="en-AU-NatashaNeural">Natasha (Female)</option>
+                  <option value="en-AU-WilliamNeural">William (Male)</option>
+                </optgroup>
+              </select>
+              <button id="btn-preview-en" class="preview-btn" title="Preview this voice">&#9654;</button>
+            </div>
+            <div class="speed-control">
+              Speed:
+              <button class="speed-btn" data-target="speed-en-range" data-delta="-5">-</button>
+              <input type="range" id="speed-en-range" min="-50" max="100" value="-5" step="5" aria-label="English speech speed">
+              <button class="speed-btn" data-target="speed-en-range" data-delta="5">+</button>
+              <span id="speed-en-label">-5%</span>
+            </div>
+          </div>
+          <div class="setting-group">
+            <label class="setting-label" for="voice-zh-select">Chinese Voice</label>
+            <div class="voice-row">
+              <select id="voice-zh-select">
+                <optgroup label="Mandarin (Mainland)">
+                  <option value="zh-CN-XiaoxiaoNeural">Xiaoxiao (Female)</option>
+                  <option value="zh-CN-YunxiNeural">Yunxi (Male)</option>
+                  <option value="zh-CN-XiaoyiNeural">Xiaoyi (Female)</option>
+                  <option value="zh-CN-YunjianNeural">Yunjian (Male)</option>
+                  <option value="zh-CN-XiaochenNeural">Xiaochen (Female)</option>
+                  <option value="zh-CN-YunyangNeural" selected>Yunyang (Male)</option>
+                </optgroup>
+                <optgroup label="Mandarin (Taiwan)">
+                  <option value="zh-TW-HsiaoChenNeural">HsiaoChen (Female)</option>
+                  <option value="zh-TW-YunJheNeural">YunJhe (Male)</option>
+                </optgroup>
+              </select>
+              <button id="btn-preview-zh" class="preview-btn" title="Preview this voice">&#9654;</button>
+            </div>
+            <div class="speed-control">
+              Speed:
+              <button class="speed-btn" data-target="speed-zh-range" data-delta="-5">-</button>
+              <input type="range" id="speed-zh-range" min="-50" max="100" value="0" step="5" aria-label="Chinese speech speed">
+              <button class="speed-btn" data-target="speed-zh-range" data-delta="5">+</button>
+              <span id="speed-zh-label">0%</span>
+            </div>
+          </div>
+        </div>
+      </details>
     </div>
 
     <div class="main-content">
@@ -128,12 +137,14 @@
       <aside id="chapter-sidebar" class="sidebar">
         <div class="sidebar-header">
           <h3>Chapters <button id="btn-select-all" class="small-btn" title="Select/deselect all (Ctrl+Shift+A)">Select All</button></h3>
-          <div class="sidebar-actions">
-            <button id="btn-translate-selected" class="action-btn" title="Translate selected">Translate</button>
-            <button id="btn-generate-selected" class="action-btn" title="Generate MP3s">MP3s</button>
-            <button id="btn-translate-generate" class="action-btn" title="Translate + MP3 (Ctrl+Shift+G)">All-in-One</button>
-            <button id="btn-export-selected" class="action-btn" title="Export Markdown">Export</button>
-            <button id="btn-download-all" class="action-btn" title="Download all as ZIP" disabled>ZIP</button>
+          <!-- Primary CTA -->
+          <button id="btn-translate-generate" class="primary-cta" title="Translate + Generate MP3 (Ctrl+Shift+G)">Generate Audio</button>
+          <!-- Secondary actions -->
+          <div class="sidebar-actions-secondary">
+            <button id="btn-translate-selected" class="secondary-btn" title="Translate selected">Translate Only</button>
+            <button id="btn-generate-selected" class="secondary-btn" title="Generate MP3 only">MP3 Only</button>
+            <button id="btn-export-selected" class="secondary-btn" title="Export Markdown">Export MD</button>
+            <button id="btn-download-all" class="secondary-btn" title="Download all as ZIP" disabled>Download ZIP</button>
           </div>
         </div>
         <ul id="chapter-list" class="chapter-list" role="listbox" aria-label="Book chapters"></ul>
@@ -145,6 +156,12 @@
           <p>Select a chapter from the sidebar to view its content</p>
         </div>
         <div id="chapter-view" class="chapter-view" hidden>
+          <!-- Status summary bar -->
+          <div id="chapter-status-bar" class="chapter-status-bar">
+            <span id="status-translation" class="status-badge">Not translated</span>
+            <span id="status-audio" class="status-badge">No audio</span>
+            <span id="status-checkpoint" class="status-badge" hidden></span>
+          </div>
           <div class="chapter-header">
             <h2 id="chapter-title"></h2>
             <div class="chapter-actions">
@@ -163,6 +180,9 @@
         </div>
       </main>
     </div>
+
+    <!-- Toast container for non-blocking notifications -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
     <!-- Progress Overlay -->
     <div id="progress-overlay" class="progress-overlay" hidden>

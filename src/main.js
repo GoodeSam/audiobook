@@ -56,6 +56,14 @@ const progressBar = $('progress-bar');
 const progressPercent = $('progress-percent');
 const progressText = $('progress-text');
 const btnCancel = $('btn-cancel');
+const settingsPanel = $('settings-panel');
+const btnToggleSettings = $('btn-toggle-settings');
+const summaryMode = $('summary-mode');
+const summaryLang = $('summary-lang');
+const statusTranslation = $('status-translation');
+const statusAudio = $('status-audio');
+const statusCheckpoint = $('status-checkpoint');
+const toastContainer = $('toast-container');
 
 // ── Upload handling ──
 
@@ -188,6 +196,72 @@ btnBack.addEventListener('click', () => {
   uploadScreen.classList.add('active');
   resetDropZone();
 });
+
+// ── Settings toggle & config summary ──
+
+btnToggleSettings.addEventListener('click', () => {
+  settingsPanel.classList.toggle('collapsed');
+  btnToggleSettings.textContent = settingsPanel.classList.contains('collapsed') ? 'Settings ▸' : 'Settings ▾';
+});
+
+function updateConfigSummary() {
+  const modeLabels = { original: 'Original', translated: 'Translated', bilingual: 'Bilingual' };
+  summaryMode.textContent = modeLabels[audioModeSelect.value] || 'Bilingual';
+  const langEl = translateLangSelect.selectedOptions[0];
+  summaryLang.textContent = '→ ' + (langEl ? langEl.textContent : 'Chinese');
+}
+
+audioModeSelect.addEventListener('change', updateConfigSummary);
+translateLangSelect.addEventListener('change', updateConfigSummary);
+updateConfigSummary();
+
+// ── Toast notification system (replaces alert) ──
+
+function showToast(message, type = 'info', duration = 5000) {
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  toastContainer.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transition = 'opacity 0.3s';
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
+}
+
+// ── Chapter status bar ──
+
+function updateChapterStatusBar(idx) {
+  const ch = state.book.chapters[idx];
+  const hasTr = !!ch.translatedMarkdown;
+  const hasAudio = !!state.audioBlobs[idx];
+  const hasTrCp = !!state.translationCheckpoints[idx];
+  const hasAuCp = !!state.audioCheckpoints[idx];
+
+  if (hasTr && !hasTrCp) {
+    statusTranslation.textContent = 'Translated';
+    statusTranslation.className = 'status-badge status-done';
+  } else if (hasTrCp) {
+    const cp = state.translationCheckpoints[idx];
+    statusTranslation.textContent = `Translating ${cp.completedIndex}/${cp.totalParagraphs}`;
+    statusTranslation.className = 'status-badge status-partial';
+  } else {
+    statusTranslation.textContent = 'Not translated';
+    statusTranslation.className = 'status-badge status-pending';
+  }
+
+  if (hasAudio && !hasAuCp) {
+    statusAudio.textContent = 'Audio ready';
+    statusAudio.className = 'status-badge status-done';
+  } else if (hasAuCp) {
+    const cp = state.audioCheckpoints[idx];
+    statusAudio.textContent = `Audio ${cp.completedIndex}/${cp.totalSegments}`;
+    statusAudio.className = 'status-badge status-partial';
+  } else {
+    statusAudio.textContent = 'No audio';
+    statusAudio.className = 'status-badge status-pending';
+  }
+}
 
 // ── Speed controls ──
 
@@ -351,13 +425,7 @@ function renderChapterList() {
 
     const hasTrCp = !!state.translationCheckpoints[idx];
     const hasAuCp = !!state.audioCheckpoints[idx];
-    let iconHtml = '';
-    if (ch.translatedMarkdown && !hasTrCp) iconHtml += '<span class="status-icon" title="Translated">🌐</span>';
-    else if (hasTrCp) iconHtml += '<span class="status-icon" title="Translation paused">⏸</span>';
-    if (state.audioBlobs[idx] && !hasAuCp) iconHtml += '<span class="status-icon" title="Audio ready">🔊</span>';
-    else if (hasAuCp) iconHtml += '<span class="status-icon" title="Audio paused">⏸</span>';
-    if (!iconHtml) iconHtml = '<span class="status-icon">📄</span>';
-    icons.innerHTML = iconHtml;
+    icons.innerHTML = buildStatusLabel(ch, idx);
   }
   updateBulkButtons();
 }
@@ -368,15 +436,21 @@ function updateChapterRow(idx) {
   if (!li) return;
   const ch = state.book.chapters[idx];
   const icons = li.querySelector('.status-icons');
+  icons.innerHTML = buildStatusLabel(ch, idx);
+}
+
+/** Build status label HTML for a chapter row. */
+function buildStatusLabel(ch, idx) {
   const hasTrCp = !!state.translationCheckpoints[idx];
   const hasAuCp = !!state.audioCheckpoints[idx];
-  let iconHtml = '';
-  if (ch.translatedMarkdown && !hasTrCp) iconHtml += '<span class="status-icon" title="Translated">🌐</span>';
-  else if (hasTrCp) iconHtml += '<span class="status-icon" title="Translation paused">⏸</span>';
-  if (state.audioBlobs[idx] && !hasAuCp) iconHtml += '<span class="status-icon" title="Audio ready">🔊</span>';
-  else if (hasAuCp) iconHtml += '<span class="status-icon" title="Audio paused">⏸</span>';
-  if (!iconHtml) iconHtml = '<span class="status-icon">📄</span>';
-  icons.innerHTML = iconHtml;
+  const hasTr = !!ch.translatedMarkdown;
+  const hasAudio = !!state.audioBlobs[idx];
+
+  if (hasTrCp) return '<span class="row-status row-status-partial" role="img" aria-label="Translation in progress">Translating...</span>';
+  if (hasAuCp) return '<span class="row-status row-status-partial" role="img" aria-label="Audio in progress">Generating...</span>';
+  if (hasTr && hasAudio) return '<span class="row-status row-status-done" role="img" aria-label="Complete">Ready</span>';
+  if (hasTr) return '<span class="row-status row-status-done" role="img" aria-label="Translated">Translated</span>';
+  return '<span class="row-status row-status-pending" role="img" aria-label="Not processed">Pending</span>';
 }
 
 // Event delegation for chapter list — avoids per-row listeners
@@ -434,6 +508,7 @@ function selectChapter(idx) {
   updateTabs();
   showTab(state.activeTab);
   updateChapterButtons(idx);
+  updateChapterStatusBar(idx);
 }
 
 /**
@@ -601,7 +676,7 @@ async function translateSingleChapter(idx) {
   } catch (err) {
     // Checkpoint is preserved in state.translationCheckpoints[idx] for resume
     if (!err.message.includes('cancelled')) {
-      alert('Translation error: ' + err.message);
+      showToast('Translation error: ' + err.message, 'error');
     }
   } finally {
     state.generating = false;
@@ -660,7 +735,7 @@ async function translateMultipleChapters(indices) {
     }
   } catch (err) {
     if (!err.message.includes('cancelled')) {
-      alert('Translation error: ' + err.message);
+      showToast('Translation error: ' + err.message, 'error');
     }
   } finally {
     state.generating = false;
@@ -759,7 +834,7 @@ async function generateSingleChapter(idx) {
   } catch (err) {
     // Checkpoint is preserved in state.audioCheckpoints[idx] for resume
     if (!err.message.includes('cancelled')) {
-      alert('Error generating audio: ' + err.message);
+      showToast('Audio generation error: ' + err.message, 'error');
     }
   } finally {
     state.generating = false;
@@ -876,11 +951,11 @@ async function generateMultipleChapters(indices) {
 
     if (failures.length > 0) {
       const summary = failures.map(f => `${f.chapter} (${f.phase}): ${f.error}`).join('\n');
-      alert(`${failures.length} chapter(s) had errors:\n${summary}`);
+      showToast(`${failures.length} chapter(s) had errors`, 'error', 8000);
     }
   } catch (err) {
     if (!err.message.includes('cancelled')) {
-      alert('Error: ' + err.message);
+      showToast('Error: ' + err.message, 'error');
     }
   } finally {
     state.generating = false;
@@ -939,7 +1014,7 @@ btnExportSelected.addEventListener('click', async () => {
     const zipBlob = await zip.generateAsync({ type: 'blob' });
     downloadBlob(zipBlob, `${sanitizeFilename(state.book.title)}_chapters.zip`);
   } catch (err) {
-    alert('Export failed: ' + err.message);
+    showToast('Export failed: ' + err.message, 'error');
   }
 });
 
@@ -966,7 +1041,7 @@ btnDownloadAll.addEventListener('click', async () => {
     const zipBlob = await zip.generateAsync({ type: 'blob' });
     downloadBlob(zipBlob, `${sanitizeFilename(state.book.title)}.zip`);
   } catch (err) {
-    alert('Download failed: ' + err.message);
+    showToast('Download failed: ' + err.message, 'error');
   }
 });
 
