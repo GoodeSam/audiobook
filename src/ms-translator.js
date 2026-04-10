@@ -6,14 +6,18 @@
  * and uses it with api.cognitive.microsofttranslator.com.
  *
  * Token is cached for 8 minutes (valid for ~10 minutes).
+ * Paragraphs are batched (up to 25 per API call) to minimize round-trips.
+ * AbortController is used for immediate cancellation of in-flight requests.
  */
 
 const MS_AUTH_URL = 'https://edge.microsoft.com/translate/auth';
 const MS_TRANSLATE_URL = 'https://api.cognitive.microsofttranslator.com/translate';
+const BATCH_SIZE = 25; // Microsoft API limit per request
 
 let _cachedToken = null;
 let _tokenExpiry = 0;
 let _cancelled = false;
+let _abortController = null;
 
 /**
  * Get a Microsoft Translate auth token, using cache when valid.
@@ -25,7 +29,8 @@ export async function msGetAuthToken(fetchFn = fetch) {
     return _cachedToken;
   }
 
-  const resp = await fetchFn(MS_AUTH_URL);
+  const signal = _abortController?.signal;
+  const resp = await fetchFn(MS_AUTH_URL, signal ? { signal } : undefined);
   if (!resp.ok) throw new Error(`Microsoft auth error: ${resp.status}`);
 
   const token = await resp.text();
@@ -43,29 +48,45 @@ export async function msGetAuthToken(fetchFn = fetch) {
  * @returns {Promise<string>} Translated text.
  */
 export async function translateText(text, from, to, fetchFn = fetch) {
+  const results = await translateBatch([text], from, to, fetchFn);
+  return results[0];
+}
+
+/**
+ * Translate an array of text strings in a single API call.
+ * @param {string[]} texts - Array of texts to translate (max 25).
+ * @param {string} from - Source language code.
+ * @param {string} to - Target language code.
+ * @param {Function} fetchFn - Fetch implementation (for testing).
+ * @returns {Promise<string[]>} Translated texts in same order.
+ */
+export async function translateBatch(texts, from, to, fetchFn = fetch) {
+  if (texts.length === 0) return [];
+
   const token = await msGetAuthToken(fetchFn);
   const params = new URLSearchParams({ 'api-version': '3.0', to });
-  // Only set 'from' if explicitly provided and not 'auto'; omitting lets Microsoft auto-detect
   if (from && from !== 'auto') {
     params.set('from', from);
   }
 
+  const signal = _abortController?.signal;
   const resp = await fetchFn(`${MS_TRANSLATE_URL}?${params.toString()}`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify([{ Text: text }]),
+    body: JSON.stringify(texts.map(t => ({ Text: t }))),
+    ...(signal ? { signal } : {}),
   });
 
   if (!resp.ok) throw new Error(`Microsoft Translate error: ${resp.status}`);
 
   const data = await resp.json();
-  if (data?.[0]?.translations?.[0]?.text) {
-    return data[0].translations[0].text;
-  }
-  throw new Error('Unexpected Microsoft Translate response');
+  return data.map((item, i) => {
+    if (item?.translations?.[0]?.text) return item.translations[0].text;
+    throw new Error(`Unexpected response for text ${i}`);
+  });
 }
 
 /**
@@ -74,17 +95,16 @@ export async function translateText(text, from, to, fetchFn = fetch) {
 function shouldSkipParagraph(para) {
   const trimmed = para.trim();
   if (!trimmed) return true;
-  if (/^#{1,6}\s+/.test(trimmed)) return true;       // Headings
-  if (/^!\[.*\]\(.*\)$/.test(trimmed)) return true;   // Images
-  if (/^---+$/.test(trimmed)) return true;             // Horizontal rules
+  if (/^#{1,6}\s+/.test(trimmed)) return true;
+  if (/^!\[.*\]\(.*\)$/.test(trimmed)) return true;
+  if (/^---+$/.test(trimmed)) return true;
   return false;
 }
 
 /**
- * Translate a full markdown chapter paragraph by paragraph.
+ * Translate a full markdown chapter in batches.
  * Headings, images, and rules are preserved untranslated.
- * Supports resumption from a checkpoint via options.startIndex and
- * options.existingTranslations.
+ * Supports resumption via startIndex/existingTranslations.
  *
  * @param {string} markdown - Chapter markdown text.
  * @param {string} from - Source language code.
@@ -94,11 +114,13 @@ function shouldSkipParagraph(para) {
  * @param {Function} [options.onProgress] - Progress callback(current, total).
  * @param {number} [options.startIndex=0] - Paragraph index to resume from.
  * @param {string[]} [options.existingTranslations=[]] - Already-translated paragraphs.
- * @param {Function} [options.onCheckpoint] - Called with checkpoint data after each paragraph.
+ * @param {Function} [options.onCheckpoint] - Called after each batch with checkpoint data.
  * @returns {Promise<string>} Translated markdown.
  */
 export async function translateChapter(markdown, from, to, options = {}) {
   _cancelled = false;
+  _abortController = new AbortController();
+
   const {
     fetchFn = fetch,
     onProgress,
@@ -110,10 +132,13 @@ export async function translateChapter(markdown, from, to, options = {}) {
   const paragraphs = markdown.split(/\n\n+/).filter(p => p.trim());
   const total = paragraphs.filter(p => !shouldSkipParagraph(p)).length;
   const translated = [...existingTranslations];
-  // Count how many translatable paragraphs are already done
   let progress = existingTranslations.filter(
     (_, i) => i < paragraphs.length && !shouldSkipParagraph(paragraphs[i])
   ).length;
+
+  // Collect translatable paragraphs into batches
+  let batch = [];       // { index, text }
+  let batchStart = -1;
 
   for (let i = startIndex; i < paragraphs.length; i++) {
     if (_cancelled) throw new Error('Translation cancelled');
@@ -121,27 +146,65 @@ export async function translateChapter(markdown, from, to, options = {}) {
     const para = paragraphs[i];
 
     if (shouldSkipParagraph(para)) {
+      // Flush any pending batch before adding skipped paragraph
+      if (batch.length > 0) {
+        const results = await flushBatch(batch, from, to, fetchFn);
+        for (const result of results) {
+          translated.push(result);
+          progress++;
+          if (onProgress) onProgress(progress, total);
+        }
+        batch = [];
+      }
       translated.push(para);
       continue;
     }
 
-    const result = await translateText(para.trim(), from, to, fetchFn);
-    translated.push(result);
-    progress++;
-    if (onProgress) onProgress(progress, total);
-    if (onCheckpoint) onCheckpoint({ completedIndex: i + 1, translatedParagraphs: [...translated], totalParagraphs: paragraphs.length });
+    batch.push({ index: i, text: para.trim() });
 
-    if (_cancelled) throw new Error('Translation cancelled');
+    // Flush when batch is full
+    if (batch.length >= BATCH_SIZE) {
+      const results = await flushBatch(batch, from, to, fetchFn);
+      for (const result of results) {
+        translated.push(result);
+        progress++;
+        if (onProgress) onProgress(progress, total);
+      }
+      if (onCheckpoint) onCheckpoint({ completedIndex: i + 1, translatedParagraphs: translated, totalParagraphs: paragraphs.length });
+      batch = [];
+    }
   }
 
+  // Flush remaining batch
+  if (batch.length > 0) {
+    if (_cancelled) throw new Error('Translation cancelled');
+    const results = await flushBatch(batch, from, to, fetchFn);
+    for (const result of results) {
+      translated.push(result);
+      progress++;
+      if (onProgress) onProgress(progress, total);
+    }
+    if (onCheckpoint) onCheckpoint({ completedIndex: paragraphs.length, translatedParagraphs: translated, totalParagraphs: paragraphs.length });
+  }
+
+  _abortController = null;
   return translated.join('\n\n');
 }
 
+async function flushBatch(batch, from, to, fetchFn) {
+  const texts = batch.map(b => b.text);
+  return translateBatch(texts, from, to, fetchFn);
+}
+
 /**
- * Cancel an in-progress translation.
+ * Cancel an in-progress translation, aborting in-flight requests.
  */
 export function cancelTranslation() {
   _cancelled = true;
+  if (_abortController) {
+    _abortController.abort();
+    _abortController = null;
+  }
 }
 
 /**

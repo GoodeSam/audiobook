@@ -320,7 +320,7 @@ export async function generateChapterAudio(options = {}) {
 
     audioBlobs.push(blob);
     if (onProgress) onProgress(i + 1, total);
-    if (onCheckpoint) onCheckpoint({ completedIndex: i + 1, totalSegments: total, audioBlobs: [...audioBlobs] });
+    if (onCheckpoint) onCheckpoint({ completedIndex: i + 1, totalSegments: total, audioBlobs });
   }
 
   return new Blob(audioBlobs, { type: 'audio/mpeg' });

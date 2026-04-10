@@ -197,13 +197,22 @@ const PREVIEW_SAMPLES = {
 const btnPreviewEn = $('btn-preview-en');
 const btnPreviewZh = $('btn-preview-zh');
 let _previewAudio = null;
+let _previewUrl = null;
 
-async function previewVoice(voice, speechRate, sampleKey, btn) {
-  // Stop any currently playing preview
+function cleanupPreview() {
   if (_previewAudio) {
     _previewAudio.pause();
+    _previewAudio.onended = null;
     _previewAudio = null;
   }
+  if (_previewUrl) {
+    URL.revokeObjectURL(_previewUrl);
+    _previewUrl = null;
+  }
+}
+
+async function previewVoice(voice, speechRate, sampleKey, btn) {
+  cleanupPreview();
 
   const original = btn.textContent;
   btn.disabled = true;
@@ -211,24 +220,23 @@ async function previewVoice(voice, speechRate, sampleKey, btn) {
 
   try {
     const blob = await synthesizeText(PREVIEW_SAMPLES[sampleKey], { voice, speechRate });
-    const url = URL.createObjectURL(blob);
-    _previewAudio = new Audio(url);
+    _previewUrl = URL.createObjectURL(blob);
+    _previewAudio = new Audio(_previewUrl);
     _previewAudio.onended = () => {
-      URL.revokeObjectURL(url);
-      _previewAudio = null;
+      cleanupPreview();
       btn.textContent = '\u25B6';
       btn.disabled = false;
     };
-    btn.textContent = '\u25A0'; // Stop square
+    btn.textContent = '\u25A0';
     btn.disabled = false;
     btn.onclick = () => {
-      _previewAudio.pause();
-      _previewAudio = null;
+      cleanupPreview();
       btn.textContent = '\u25B6';
       btn.onclick = null;
     };
     _previewAudio.play();
   } catch {
+    cleanupPreview();
     btn.textContent = original;
     btn.disabled = false;
   }
@@ -746,7 +754,7 @@ btnExportSelected.addEventListener('click', async () => {
   }
 
   // Multiple files -> ZIP
-  const JSZip = (await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm')).default;
+  const JSZip = (await import('jszip')).default;
   const zip = new JSZip();
   for (const f of files) zip.file(f.filename, f.content);
   const zipBlob = await zip.generateAsync({ type: 'blob' });
@@ -757,7 +765,7 @@ btnDownloadAll.addEventListener('click', async () => {
   const blobs = state.audioBlobs;
   if (Object.keys(blobs).length === 0) return;
 
-  const JSZip = (await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm')).default;
+  const JSZip = (await import('jszip')).default;
   const zip = new JSZip();
   const chapters = state.book.chapters;
 

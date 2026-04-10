@@ -15,7 +15,7 @@
  * @returns {Promise<{title: string, chapters: Array<{title: string, html: string}>}>}
  */
 export async function parseEPUB(file) {
-  const JSZip = (await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm')).default;
+  const JSZip = (await import('jszip')).default;
   const zip = await JSZip.loadAsync(file);
 
   // 1. Find the OPF file via container.xml

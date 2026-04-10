@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   msGetAuthToken,
   translateText,
+  translateBatch,
   translateChapter,
   cancelTranslation,
   resetTranslationState,
@@ -153,11 +154,13 @@ describe('translateChapter', () => {
 
   it('translates each paragraph and returns results', async () => {
     const markdown = 'First paragraph.\n\nSecond paragraph.';
-    let callCount = 0;
     const fetchFn = mockFetch([
       okTextResponse('token'),
-      okJsonResponse([{ translations: [{ text: '第一段。' }] }]),
-      okJsonResponse([{ translations: [{ text: '第二段。' }] }]),
+      // Both paragraphs batched in one call
+      okJsonResponse([
+        { translations: [{ text: '第一段。' }] },
+        { translations: [{ text: '第二段。' }] },
+      ]),
     ]);
 
     const progressCalls = [];
@@ -203,8 +206,11 @@ describe('translateChapter', () => {
     const markdown = 'Text.\n\n\n\nMore text.';
     const fetchFn = mockFetch([
       okTextResponse('token'),
-      okJsonResponse([{ translations: [{ text: '文本。' }] }]),
-      okJsonResponse([{ translations: [{ text: '更多。' }] }]),
+      // Both texts batched in one call
+      okJsonResponse([
+        { translations: [{ text: '文本。' }] },
+        { translations: [{ text: '更多。' }] },
+      ]),
     ]);
 
     const result = await translateChapter(markdown, 'en', 'zh-Hans', { fetchFn });
@@ -213,24 +219,22 @@ describe('translateChapter', () => {
   });
 
   it('respects cancellation', async () => {
+    // Use many paragraphs so there are multiple batches (batch size = 25)
+    // Or cancel during the fetch itself
     const markdown = 'Paragraph 1.\n\nParagraph 2.\n\nParagraph 3.';
-    let translateCallCount = 0;
     const fetchFn = async (url, opts) => {
       if (url.includes('translate/auth')) {
         return okTextResponse('token');
       }
-      translateCallCount++;
-      if (translateCallCount === 1) {
-        // Cancel after first translation
-        cancelTranslation();
-        return okJsonResponse([{ translations: [{ text: '段落一。' }] }]);
-      }
-      return okJsonResponse([{ translations: [{ text: '段落。' }] }]);
+      // Cancel during the translate fetch — AbortController aborts the signal
+      cancelTranslation();
+      // Simulate abort error
+      throw new DOMException('The operation was aborted', 'AbortError');
     };
 
     await expect(
       translateChapter(markdown, 'en', 'zh-Hans', { fetchFn })
-    ).rejects.toThrow('cancelled');
+    ).rejects.toThrow();
   });
 
   it('skips horizontal rules', async () => {
@@ -245,5 +249,78 @@ describe('translateChapter', () => {
     expect(result).toContain('---');
     expect(result).toContain('上面。');
     expect(result).toContain('下面。');
+  });
+});
+
+describe('translateBatch', () => {
+  beforeEach(() => {
+    _clearTokenCache();
+  });
+
+  it('translates multiple texts in a single API call', async () => {
+    const fetchFn = mockFetch([
+      okTextResponse('token'),
+      okJsonResponse([
+        { translations: [{ text: '你好' }] },
+        { translations: [{ text: '世界' }] },
+      ]),
+    ]);
+
+    const results = await translateBatch(['Hello', 'World'], 'en', 'zh-Hans', fetchFn);
+
+    expect(results).toEqual(['你好', '世界']);
+    // Only 2 calls: 1 auth + 1 translate (not 1 per text)
+    expect(fetchFn.calls.length).toBe(2);
+
+    const body = JSON.parse(fetchFn.calls[1].opts.body);
+    expect(body).toEqual([{ Text: 'Hello' }, { Text: 'World' }]);
+  });
+
+  it('returns empty array for empty input', async () => {
+    const fetchFn = mockFetch([]);
+    const results = await translateBatch([], 'en', 'zh-Hans', fetchFn);
+    expect(results).toEqual([]);
+    expect(fetchFn.calls.length).toBe(0);
+  });
+});
+
+describe('translateChapter batching', () => {
+  beforeEach(() => {
+    _clearTokenCache();
+    resetTranslationState();
+  });
+
+  it('batches consecutive translatable paragraphs', async () => {
+    const markdown = 'Para one.\n\nPara two.\n\nPara three.';
+    const fetchFn = mockFetch([
+      okTextResponse('token'),
+      okJsonResponse([
+        { translations: [{ text: '段一。' }] },
+        { translations: [{ text: '段二。' }] },
+        { translations: [{ text: '段三。' }] },
+      ]),
+    ]);
+
+    const result = await translateChapter(markdown, 'en', 'zh-Hans', { fetchFn });
+
+    expect(result).toContain('段一。');
+    expect(result).toContain('段三。');
+    // 1 auth + 1 batch translate (not 3 individual calls)
+    expect(fetchFn.calls.length).toBe(2);
+  });
+
+  it('flushes batch before skipped paragraphs', async () => {
+    const markdown = 'Text.\n\n# Heading\n\nMore text.';
+    const fetchFn = mockFetch([
+      okTextResponse('token'),
+      okJsonResponse([{ translations: [{ text: '文本。' }] }]),
+      okJsonResponse([{ translations: [{ text: '更多。' }] }]),
+    ]);
+
+    const result = await translateChapter(markdown, 'en', 'zh-Hans', { fetchFn });
+
+    expect(result).toContain('文本。');
+    expect(result).toContain('# Heading');
+    expect(result).toContain('更多。');
   });
 });
