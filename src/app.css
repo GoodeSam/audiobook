@@ -163,6 +163,35 @@ body {
   color: var(--text);
 }
 
+.voice-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.voice-row select {
+  flex: 1;
+}
+
+.preview-btn {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--accent);
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.preview-btn:hover {
+  background: var(--accent);
+  color: white;
+}
+.preview-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 .speed-control {
   display: flex;
   align-items: center;

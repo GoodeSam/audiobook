@@ -6,7 +6,7 @@
 
 import { parseEPUB } from './epub-parser.js';
 import { htmlToMarkdown, cleanMarkdown } from './html-to-markdown.js';
-import { generateChapterAudio, cancelGeneration } from './edge-tts.js';
+import { generateChapterAudio, cancelGeneration, synthesizeText } from './edge-tts.js';
 import { translateChapter, cancelTranslation, resetTranslationState } from './ms-translator.js';
 import { sanitizeFilename, exportMultipleChapters } from './chapter-export.js';
 import { ProgressTracker } from './progress-tracker.js';
@@ -172,6 +172,61 @@ speedEnRange.addEventListener('input', () => {
 speedZhRange.addEventListener('input', () => {
   const v = speedZhRange.value;
   speedZhLabel.textContent = `${v >= 0 ? '+' : ''}${v}%`;
+});
+
+// ── Voice preview ──
+
+const PREVIEW_SAMPLES = {
+  en: 'The quick brown fox jumps over the lazy dog. Every great journey begins with a single step.',
+  zh: '春眠不觉晓，处处闻啼鸟。夜来风雨声，花落知多少。',
+};
+
+const btnPreviewEn = $('btn-preview-en');
+const btnPreviewZh = $('btn-preview-zh');
+let _previewAudio = null;
+
+async function previewVoice(voice, speechRate, sampleKey, btn) {
+  // Stop any currently playing preview
+  if (_previewAudio) {
+    _previewAudio.pause();
+    _previewAudio = null;
+  }
+
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '...';
+
+  try {
+    const blob = await synthesizeText(PREVIEW_SAMPLES[sampleKey], { voice, speechRate });
+    const url = URL.createObjectURL(blob);
+    _previewAudio = new Audio(url);
+    _previewAudio.onended = () => {
+      URL.revokeObjectURL(url);
+      _previewAudio = null;
+      btn.textContent = '\u25B6';
+      btn.disabled = false;
+    };
+    btn.textContent = '\u25A0'; // Stop square
+    btn.disabled = false;
+    btn.onclick = () => {
+      _previewAudio.pause();
+      _previewAudio = null;
+      btn.textContent = '\u25B6';
+      btn.onclick = null;
+    };
+    _previewAudio.play();
+  } catch {
+    btn.textContent = original;
+    btn.disabled = false;
+  }
+}
+
+btnPreviewEn.addEventListener('click', () => {
+  previewVoice(voiceEnSelect.value, parseInt(speedEnRange.value), 'en', btnPreviewEn);
+});
+
+btnPreviewZh.addEventListener('click', () => {
+  previewVoice(voiceZhSelect.value, parseInt(speedZhRange.value), 'zh', btnPreviewZh);
 });
 
 // ── Chapter list ──

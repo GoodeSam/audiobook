@@ -36,24 +36,27 @@
       <!-- Voice Settings -->
       <div class="setting-group">
         <label class="setting-label">English Voice</label>
-        <select id="voice-en-select">
-          <optgroup label="US English">
-            <option value="en-US-AriaNeural">Aria (Female)</option>
-            <option value="en-US-GuyNeural">Guy (Male)</option>
-            <option value="en-US-JennyNeural">Jenny (Female)</option>
-            <option value="en-US-ChristopherNeural">Christopher (Male)</option>
-            <option value="en-US-AnaNeural">Ana (Female)</option>
-            <option value="en-US-BrandonNeural">Brandon (Male)</option>
-          </optgroup>
-          <optgroup label="UK English">
-            <option value="en-GB-SoniaNeural">Sonia (Female)</option>
-            <option value="en-GB-RyanNeural">Ryan (Male)</option>
-          </optgroup>
-          <optgroup label="Australian English">
-            <option value="en-AU-NatashaNeural">Natasha (Female)</option>
-            <option value="en-AU-WilliamNeural">William (Male)</option>
-          </optgroup>
-        </select>
+        <div class="voice-row">
+          <select id="voice-en-select">
+            <optgroup label="US English">
+              <option value="en-US-AriaNeural">Aria (Female)</option>
+              <option value="en-US-GuyNeural">Guy (Male)</option>
+              <option value="en-US-JennyNeural">Jenny (Female)</option>
+              <option value="en-US-ChristopherNeural">Christopher (Male)</option>
+              <option value="en-US-AnaNeural">Ana (Female)</option>
+              <option value="en-US-BrandonNeural">Brandon (Male)</option>
+            </optgroup>
+            <optgroup label="UK English">
+              <option value="en-GB-SoniaNeural">Sonia (Female)</option>
+              <option value="en-GB-RyanNeural">Ryan (Male)</option>
+            </optgroup>
+            <optgroup label="Australian English">
+              <option value="en-AU-NatashaNeural">Natasha (Female)</option>
+              <option value="en-AU-WilliamNeural">William (Male)</option>
+            </optgroup>
+          </select>
+          <button id="btn-preview-en" class="preview-btn" title="Preview this voice">&#9654;</button>
+        </div>
         <label class="speed-control">
           Speed: <input type="range" id="speed-en-range" min="-50" max="100" value="0" step="10">
           <span id="speed-en-label">0%</span>
@@ -62,20 +65,23 @@
 
       <div class="setting-group">
         <label class="setting-label">Chinese Voice</label>
-        <select id="voice-zh-select">
-          <optgroup label="Mandarin (Mainland)">
-            <option value="zh-CN-XiaoxiaoNeural">Xiaoxiao (Female)</option>
-            <option value="zh-CN-YunxiNeural">Yunxi (Male)</option>
-            <option value="zh-CN-XiaoyiNeural">Xiaoyi (Female)</option>
-            <option value="zh-CN-YunjianNeural">Yunjian (Male)</option>
-            <option value="zh-CN-XiaochenNeural">Xiaochen (Female)</option>
-            <option value="zh-CN-YunyangNeural" selected>Yunyang (Male)</option>
-          </optgroup>
-          <optgroup label="Mandarin (Taiwan)">
-            <option value="zh-TW-HsiaoChenNeural">HsiaoChen (Female)</option>
-            <option value="zh-TW-YunJheNeural">YunJhe (Male)</option>
-          </optgroup>
-        </select>
+        <div class="voice-row">
+          <select id="voice-zh-select">
+            <optgroup label="Mandarin (Mainland)">
+              <option value="zh-CN-XiaoxiaoNeural">Xiaoxiao (Female)</option>
+              <option value="zh-CN-YunxiNeural">Yunxi (Male)</option>
+              <option value="zh-CN-XiaoyiNeural">Xiaoyi (Female)</option>
+              <option value="zh-CN-YunjianNeural">Yunjian (Male)</option>
+              <option value="zh-CN-XiaochenNeural">Xiaochen (Female)</option>
+              <option value="zh-CN-YunyangNeural" selected>Yunyang (Male)</option>
+            </optgroup>
+            <optgroup label="Mandarin (Taiwan)">
+              <option value="zh-TW-HsiaoChenNeural">HsiaoChen (Female)</option>
+              <option value="zh-TW-YunJheNeural">YunJhe (Male)</option>
+            </optgroup>
+          </select>
+          <button id="btn-preview-zh" class="preview-btn" title="Preview this voice">&#9654;</button>
+        </div>
         <label class="speed-control">
           Speed: <input type="range" id="speed-zh-range" min="-50" max="100" value="0" step="10">
           <span id="speed-zh-label">0%</span>
