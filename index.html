@@ -14,7 +14,7 @@
     <div class="upload-container">
       <h1>EPUB to Audiobook</h1>
       <p class="subtitle">Upload an EPUB book to extract chapters as Markdown, translate, and convert to MP3</p>
-      <div id="drop-zone" class="drop-zone">
+      <div id="drop-zone" class="drop-zone" role="button" tabindex="0" aria-label="Upload EPUB file">
         <div class="drop-icon">📖</div>
         <p>Drag & drop an EPUB file here</p>
         <p class="or">or</p>
@@ -37,7 +37,7 @@
     <div class="settings-bar">
       <!-- Voice Settings -->
       <div class="setting-group">
-        <label class="setting-label">English Voice</label>
+        <label class="setting-label" for="voice-en-select">English Voice</label>
         <div class="voice-row">
           <select id="voice-en-select">
             <optgroup label="US English">
@@ -62,14 +62,14 @@
         <div class="speed-control">
           Speed:
           <button class="speed-btn" data-target="speed-en-range" data-delta="-5">-</button>
-          <input type="range" id="speed-en-range" min="-50" max="100" value="-5" step="5">
+          <input type="range" id="speed-en-range" min="-50" max="100" value="-5" step="5" aria-label="English speech speed">
           <button class="speed-btn" data-target="speed-en-range" data-delta="5">+</button>
           <span id="speed-en-label">-5%</span>
         </div>
       </div>
 
       <div class="setting-group">
-        <label class="setting-label">Chinese Voice</label>
+        <label class="setting-label" for="voice-zh-select">Chinese Voice</label>
         <div class="voice-row">
           <select id="voice-zh-select">
             <optgroup label="Mandarin (Mainland)">
@@ -90,14 +90,14 @@
         <div class="speed-control">
           Speed:
           <button class="speed-btn" data-target="speed-zh-range" data-delta="-5">-</button>
-          <input type="range" id="speed-zh-range" min="-50" max="100" value="0" step="5">
+          <input type="range" id="speed-zh-range" min="-50" max="100" value="0" step="5" aria-label="Chinese speech speed">
           <button class="speed-btn" data-target="speed-zh-range" data-delta="5">+</button>
           <span id="speed-zh-label">0%</span>
         </div>
       </div>
 
       <div class="setting-group">
-        <label class="setting-label">Audio Mode</label>
+        <label class="setting-label" for="audio-mode-select">Audio Mode</label>
         <select id="audio-mode-select">
           <option value="original">Original</option>
           <option value="translated">Translated</option>
@@ -106,7 +106,7 @@
       </div>
 
       <div class="setting-group">
-        <label class="setting-label">Translate To</label>
+        <label class="setting-label" for="translate-lang-select">Translate To</label>
         <select id="translate-lang-select">
           <option value="zh-Hans">Chinese (Simplified)</option>
           <option value="zh-Hant">Chinese (Traditional)</option>
@@ -136,7 +136,7 @@
             <button id="btn-download-all" class="action-btn" title="Download all as ZIP" disabled>ZIP</button>
           </div>
         </div>
-        <ul id="chapter-list" class="chapter-list"></ul>
+        <ul id="chapter-list" class="chapter-list" role="listbox" aria-label="Book chapters"></ul>
       </aside>
 
       <!-- Chapter Content -->
@@ -154,25 +154,25 @@
               <button id="btn-download-md" class="action-btn">Download MD</button>
             </div>
           </div>
-          <div class="chapter-content-tabs">
-            <button class="tab-btn active" data-tab="original">Original</button>
-            <button class="tab-btn" data-tab="translated">Translated</button>
-            <button class="tab-btn" data-tab="bilingual">Bilingual</button>
+          <div class="chapter-content-tabs" role="tablist" aria-label="Chapter view mode">
+            <button class="tab-btn active" data-tab="original" role="tab" aria-selected="true" aria-controls="chapter-markdown">Original</button>
+            <button class="tab-btn" data-tab="translated" role="tab" aria-selected="false" aria-controls="chapter-markdown">Translated</button>
+            <button class="tab-btn" data-tab="bilingual" role="tab" aria-selected="false" aria-controls="chapter-markdown">Bilingual</button>
           </div>
-          <div id="chapter-markdown" class="markdown-content"></div>
+          <div id="chapter-markdown" class="markdown-content" role="tabpanel"></div>
         </div>
       </main>
     </div>
 
     <!-- Progress Overlay -->
     <div id="progress-overlay" class="progress-overlay" hidden>
-      <div class="progress-card">
+      <div class="progress-card" role="dialog" aria-modal="true" aria-labelledby="progress-title">
         <h3 id="progress-title">Working...</h3>
         <div class="progress-bar-container">
           <div id="progress-bar" class="progress-bar"></div>
           <span id="progress-percent" class="progress-percent">0%</span>
         </div>
-        <p id="progress-text"></p>
+        <p id="progress-text" aria-live="polite"></p>
         <button id="btn-cancel" class="action-btn cancel-btn">Cancel</button>
       </div>
     </div>

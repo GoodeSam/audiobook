@@ -10,11 +10,15 @@
  * @returns {boolean}
  */
 export function isChinese(char) {
-  const code = char.charCodeAt(0);
+  const code = char.codePointAt(0);
   return (
-    (code >= 0x4E00 && code <= 0x9FFF) ||  // CJK Unified Ideographs
-    (code >= 0x3400 && code <= 0x4DBF) ||  // CJK Extension A
-    (code >= 0xF900 && code <= 0xFAFF)     // CJK Compatibility Ideographs
+    (code >= 0x4E00 && code <= 0x9FFF) ||   // CJK Unified Ideographs
+    (code >= 0x3400 && code <= 0x4DBF) ||   // CJK Extension A
+    (code >= 0xF900 && code <= 0xFAFF) ||   // CJK Compatibility Ideographs
+    (code >= 0x20000 && code <= 0x2A6DF) || // CJK Extension B
+    (code >= 0x2A700 && code <= 0x2B73F) || // CJK Extension C
+    (code >= 0x2B740 && code <= 0x2B81F) || // CJK Extension D
+    (code >= 0x2B820 && code <= 0x2CEAF)    // CJK Extension E
   );
 }
 

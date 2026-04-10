@@ -36,8 +36,9 @@ export async function parseEPUB(file) {
 
   const opfDoc = parser.parseFromString(opfXml, 'application/xml');
 
-  // Extract book title
-  const titleEl = opfDoc.querySelector('metadata title');
+  // Extract book title — try namespace-aware query first for dc:title
+  const titleEl = opfDoc.getElementsByTagNameNS('http://purl.org/dc/elements/1.1/', 'title')[0]
+    || opfDoc.querySelector('metadata title');
   const bookTitle = titleEl?.textContent?.trim() || file.name.replace(/\.epub$/i, '');
 
   // 3. Build manifest lookup (id -> href)
@@ -189,9 +190,12 @@ async function resolveImages(html, docPath, zip) {
     }
   }
 
+  // Replace only inside src="..." attributes to avoid rewriting unrelated text
   let result = html;
   for (const r of replacements) {
-    result = result.replaceAll(r.original, r.dataUrl);
+    result = result
+      .replaceAll(`src="${r.original}"`, `src="${r.dataUrl}"`)
+      .replaceAll(`src='${r.original}'`, `src='${r.dataUrl}'`);
   }
   return result;
 }

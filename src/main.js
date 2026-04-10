@@ -66,9 +66,10 @@ const DROP_ZONE_DEFAULT = `
 
 function resetDropZone(errorMsg) {
   if (errorMsg) {
+    const safe = errorMsg.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     dropZone.innerHTML = `
       <div class="drop-icon">📖</div>
-      <p style="color: var(--danger)">Error: ${errorMsg}</p>
+      <p style="color: var(--danger)">Error: ${safe}</p>
       <p class="or">Try another file</p>
       <label class="file-btn">Choose File<input type="file" accept=".epub" hidden></label>
     `;
@@ -90,7 +91,7 @@ dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
   dropZone.classList.remove('drag-over');
   const file = e.dataTransfer.files[0];
-  if (file?.name.endsWith('.epub')) handleFile(file);
+  if (file?.name.toLowerCase().endsWith('.epub')) handleFile(file);
 });
 
 // Use event delegation so it works after innerHTML replacements.
@@ -100,6 +101,13 @@ dropZone.addEventListener('change', (e) => {
     const file = e.target.files[0];
     e.target.value = '';
     handleFile(file);
+  }
+});
+dropZone.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    const input = getFileInput();
+    if (input) input.click();
   }
 });
 dropZone.addEventListener('click', (e) => {
@@ -211,33 +219,47 @@ function cleanupPreview() {
   }
 }
 
+let _previewPlaying = false;
+let _previewBtn = null;
+
 async function previewVoice(voice, speechRate, sampleKey, btn) {
+  // If already playing from this button, stop
+  if (_previewPlaying && _previewBtn === btn) {
+    stopPreview(btn);
+    return;
+  }
+  // Stop any other preview
+  if (_previewBtn && _previewBtn !== btn) stopPreview(_previewBtn);
   cleanupPreview();
 
-  const original = btn.textContent;
   btn.disabled = true;
   btn.textContent = '...';
+  _previewBtn = btn;
 
   try {
     const blob = await synthesizeText(PREVIEW_SAMPLES[sampleKey], { voice, speechRate });
     _previewUrl = URL.createObjectURL(blob);
     _previewAudio = new Audio(_previewUrl);
-    _previewAudio.onended = () => {
-      cleanupPreview();
-      btn.textContent = '\u25B6';
-      btn.disabled = false;
-    };
+    _previewPlaying = true;
+    _previewAudio.onended = () => stopPreview(btn);
     btn.textContent = '\u25A0';
     btn.disabled = false;
-    btn.onclick = () => {
-      cleanupPreview();
-      btn.textContent = '\u25B6';
-      btn.onclick = null;
-    };
     _previewAudio.play();
   } catch {
     cleanupPreview();
-    btn.textContent = original;
+    _previewPlaying = false;
+    _previewBtn = null;
+    btn.textContent = '\u25B6';
+    btn.disabled = false;
+  }
+}
+
+function stopPreview(btn) {
+  cleanupPreview();
+  _previewPlaying = false;
+  _previewBtn = null;
+  if (btn) {
+    btn.textContent = '\u25B6';
     btn.disabled = false;
   }
 }
@@ -260,6 +282,9 @@ function renderChapterList() {
     const li = document.createElement('li');
     li.className = 'chapter-item';
     li.dataset.index = idx;
+    li.tabIndex = 0;
+    li.setAttribute('role', 'option');
+    li.setAttribute('aria-selected', idx === state.activeChapter ? 'true' : 'false');
     if (idx === state.activeChapter) li.classList.add('active');
 
     const cb = document.createElement('input');
@@ -290,6 +315,9 @@ function renderChapterList() {
     li.appendChild(name);
     li.addEventListener('click', (e) => {
       if (e.target.tagName !== 'INPUT') selectChapter(idx);
+    });
+    li.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectChapter(idx); }
     });
     chapterList.appendChild(li);
   });
@@ -396,7 +424,10 @@ function updateTabs() {
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     state.activeTab = btn.dataset.tab;
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      b.classList.toggle('active', b === btn);
+      b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+    });
     showTab(btn.dataset.tab);
   });
 });
@@ -497,11 +528,15 @@ async function translateMultipleChapters(indices) {
   showProgress('Translating chapters...');
 
   try {
-    // Count total paragraphs across all chapters for accurate progress
+    // Count only translatable paragraphs (skip headings, images, rules)
+    const isTranslatable = (p) => {
+      const t = p.trim();
+      return t && !/^#{1,6}\s+/.test(t) && !/^!\[.*\]\(.*\)$/.test(t) && !/^---+$/.test(t);
+    };
     let totalParas = 0;
     for (const idx of toTranslate) {
       const md = state.book.chapters[idx].markdown;
-      totalParas += md.split(/\n\n+/).filter(p => p.trim()).length;
+      totalParas += md.split(/\n\n+/).filter(isTranslatable).length;
     }
     tracker.startPhase('translating', totalParas);
     let completedParas = 0;
@@ -521,7 +556,7 @@ async function translateMultipleChapters(indices) {
         },
       });
 
-      completedParas += ch.markdown.split(/\n\n+/).filter(p => p.trim()).length;
+      completedParas += ch.markdown.split(/\n\n+/).filter(isTranslatable).length;
       ch.translatedMarkdown = translated;
       renderChapterList();
     }
@@ -635,20 +670,20 @@ async function generateSingleChapter(idx) {
 }
 
 async function generateMultipleChapters(indices) {
-  state.generating = true;
   const mode = audioModeSelect.value;
   const total = indices.length;
   const needsTranslation = mode === 'translated' || mode === 'bilingual';
   const toTranslate = needsTranslation
-    ? indices.filter(i => !state.book.chapters[i].translatedMarkdown)
+    ? indices.filter(i => !state.book.chapters[i].translatedMarkdown || state.translationCheckpoints[i])
     : [];
-  const toGenerate = indices.filter(i => !state.audioBlobs[i]);
+  const toGenerate = indices.filter(i => !state.audioBlobs[i] || state.audioCheckpoints[i]);
 
-  // Build weighted phases: translation gets weight proportional to chapters needing it
+  // Build weighted phases
   const phases = [];
   if (toTranslate.length > 0) phases.push({ name: 'translating', weight: 0.3 });
   if (toGenerate.length > 0) phases.push({ name: 'generating', weight: 0.7 });
-  if (phases.length === 0) return;
+  if (phases.length === 0) return; // Nothing to do — don't set generating flag
+  state.generating = true;
   // If only one phase, give it full weight
   if (phases.length === 1) phases[0].weight = 1.0;
 
@@ -670,15 +705,20 @@ async function generateMultipleChapters(indices) {
       for (let i = 0; i < toTranslate.length; i++) {
         const idx = toTranslate[i];
         const ch = state.book.chapters[idx];
-        progressTitle.textContent = `Translating ${i + 1}/${toTranslate.length}: ${ch.title}`;
+        const tcp = state.translationCheckpoints[idx];
+        progressTitle.textContent = `Translating ${i + 1}/${toTranslate.length}: ${ch.title}${tcp ? ' (resuming)' : ''}`;
         resetTranslationState();
 
         const translated = await translateChapter(ch.markdown, fromLang, toLang, {
+          startIndex: tcp ? tcp.completedIndex : 0,
+          existingTranslations: tcp ? tcp.translatedParagraphs : [],
           onProgress: (current, paraTotal) => {
             tracker.advance(i + current / paraTotal);
           },
+          onCheckpoint: (cpData) => { state.translationCheckpoints[idx] = cpData; },
         });
         ch.translatedMarkdown = translated;
+        delete state.translationCheckpoints[idx];
         tracker.advance(i + 1);
         renderChapterList();
       }
@@ -691,7 +731,8 @@ async function generateMultipleChapters(indices) {
       for (let i = 0; i < toGenerate.length; i++) {
         const idx = toGenerate[i];
         const ch = state.book.chapters[idx];
-        progressTitle.textContent = `Generating ${i + 1}/${toGenerate.length}: ${ch.title}`;
+        const acp = state.audioCheckpoints[idx];
+        progressTitle.textContent = `Generating ${i + 1}/${toGenerate.length}: ${ch.title}${acp ? ' (resuming)' : ''}`;
 
         const blob = await generateChapterAudio({
           originalText: ch.markdown,
@@ -701,12 +742,16 @@ async function generateMultipleChapters(indices) {
           voiceZh: voiceZhSelect.value,
           speechRateEn: parseInt(speedEnRange.value),
           speechRateZh: parseInt(speedZhRange.value),
+          startIndex: acp ? acp.completedIndex : 0,
+          existingBlobs: acp ? acp.audioBlobs : [],
           onProgress: (current, segTotal) => {
             tracker.advance(i + current / segTotal);
           },
+          onCheckpoint: (cpData) => { state.audioCheckpoints[idx] = cpData; },
         });
 
         state.audioBlobs[idx] = blob;
+        delete state.audioCheckpoints[idx];
         tracker.advance(i + 1);
         renderChapterList();
       }
@@ -850,29 +895,45 @@ function escapeHtml(text) {
  * Escapes raw HTML first, then applies markdown transformations.
  */
 function renderMarkdownHtml(md) {
-  // First escape all HTML to prevent XSS, then apply markdown rules
-  let html = escapeHtml(md)
-    .replace(/```([^`]*?)```/gs, '<pre><code>$1</code></pre>')
-    .replace(/^######\s+(.+)$/gm, '<h6>$1</h6>')
-    .replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>')
-    .replace(/^####\s+(.+)$/gm, '<h4>$1</h4>')
-    .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
-    .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
-    .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    // Only allow data: and https: image sources after escaping
-    .replace(/!\[([^\]]*)\]\((data:[^)]+|https:\/\/[^)]+)\)/g, '<img alt="$1" src="$2">')
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1') // Strip non-safe image URLs
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" rel="noopener noreferrer">$1</a>')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Strip non-http links
-    .replace(/^---+$/gm, '<hr>')
-    .replace(/^&gt;\s+(.+)$/gm, '<blockquote>$1</blockquote>')
-    .replace(/\n\n+/g, '</p><p>')
-    .replace(/\n/g, '<br>');
+  // Split into blocks, render each independently to avoid wrapping
+  // block-level elements (h1, pre, hr, blockquote) inside <p> tags.
+  const blocks = md.split(/\n\n+/);
+  const rendered = blocks.map(block => {
+    let html = escapeHtml(block.trim());
+    if (!html) return '';
 
-  return `<p>${html}</p>`;
+    // Block-level elements
+    html = html
+      .replace(/```([^`]*?)```/gs, '<pre><code>$1</code></pre>')
+      .replace(/^######\s+(.+)$/gm, '<h6>$1</h6>')
+      .replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>')
+      .replace(/^####\s+(.+)$/gm, '<h4>$1</h4>')
+      .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
+      .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
+      .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
+      .replace(/^---+$/gm, '<hr>');
+
+    // If the block became a block-level element, return as-is
+    if (/^<(h[1-6]|pre|hr)/i.test(html)) return html;
+
+    // Inline formatting
+    html = html
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/!\[([^\]]*)\]\((data:[^)]+|https:\/\/[^)]+)\)/g, '<img alt="$1" src="$2">')
+      .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" rel="noopener noreferrer">$1</a>')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/^&gt;\s+(.+)$/gm, '<blockquote>$1</blockquote>')
+      .replace(/\n/g, '<br>');
+
+    // Wrap non-block content in <p>
+    if (/^<(blockquote|img)/i.test(html)) return html;
+    return `<p>${html}</p>`;
+  });
+
+  return rendered.filter(Boolean).join('\n');
 }
 
 // ── Keyboard shortcuts ──
