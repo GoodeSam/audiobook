@@ -10,7 +10,7 @@
  * AbortController is used for immediate cancellation of in-flight requests.
  */
 
-import { splitParagraphs, isSkipParagraph } from './paragraph-utils.js';
+import { splitParagraphs, isSkipParagraph, parseHeading } from './paragraph-utils.js';
 
 const MS_AUTH_URL = 'https://edge.microsoft.com/translate/auth';
 const MS_TRANSLATE_URL = 'https://api.cognitive.microsofttranslator.com/translate';
@@ -146,16 +146,21 @@ export async function translateChapter(markdown, from, to, options = {}) {
     (_, i) => i < paragraphs.length && !shouldSkipParagraph(paragraphs[i])
   ).length;
 
-  // Build ordered list of paragraph entries: translatable ones get batched,
-  // skipped ones (headings, images, rules) are inserted at their positions.
-  // We accumulate translatable text across skip boundaries up to BATCH_SIZE.
-  const entries = []; // { type: 'skip'|'translate', paraIndex, text }
+  // Build ordered list of paragraph entries: translatable ones (including
+  // headings) get batched, purely structural items (images, rules) are skipped.
+  const entries = []; // { type: 'skip'|'translate', paraIndex, text, headingPrefix? }
   for (let i = startIndex; i < paragraphs.length; i++) {
     const para = paragraphs[i];
     if (shouldSkipParagraph(para)) {
       entries.push({ type: 'skip', paraIndex: i, text: para });
     } else {
-      entries.push({ type: 'translate', paraIndex: i, text: para.trim() });
+      const heading = parseHeading(para);
+      if (heading) {
+        // Translate heading text, re-attach # prefix during reconstruction
+        entries.push({ type: 'translate', paraIndex: i, text: heading.text, headingPrefix: heading.prefix });
+      } else {
+        entries.push({ type: 'translate', paraIndex: i, text: para.trim() });
+      }
     }
   }
 
@@ -177,9 +182,13 @@ export async function translateChapter(markdown, from, to, options = {}) {
       // Build checkpoint from completed entries so it reflects actual progress
       const cpParas = [...existingTranslations];
       for (const entry of entries) {
-        if (entry.result !== undefined) cpParas.push(entry.result);
-        else if (entry.type === 'skip') cpParas.push(entry.text);
-        else break; // Stop at first untranslated entry
+        if (entry.result !== undefined) {
+          cpParas.push(entry.headingPrefix ? `${entry.headingPrefix} ${entry.result}` : entry.result);
+        } else if (entry.type === 'skip') {
+          cpParas.push(entry.text);
+        } else {
+          break; // Stop at first untranslated entry
+        }
       }
       onCheckpoint({ completedIndex: lastParaIndex + 1, translatedParagraphs: cpParas, totalParagraphs: paragraphs.length });
     }
@@ -205,9 +214,15 @@ export async function translateChapter(markdown, from, to, options = {}) {
     await flushCurrentBatch(entries[entries.length - 1].paraIndex);
   }
 
-  // Reconstruct output in paragraph order
+  // Reconstruct output in paragraph order, re-attaching heading prefixes
   for (const entry of entries) {
-    translated.push(entry.type === 'skip' ? entry.text : entry.result);
+    if (entry.type === 'skip') {
+      translated.push(entry.text);
+    } else if (entry.headingPrefix) {
+      translated.push(`${entry.headingPrefix} ${entry.result}`);
+    } else {
+      translated.push(entry.result);
+    }
   }
 
   _abortController = null;

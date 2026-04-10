@@ -176,19 +176,22 @@ describe('translateChapter', () => {
     ]);
   });
 
-  it('skips markdown headings (preserves them untranslated)', async () => {
+  it('translates heading text while preserving # markers', async () => {
     const markdown = '# Chapter Title\n\nSome text here.';
     const fetchFn = mockFetch([
       okTextResponse('token'),
-      okJsonResponse([{ translations: [{ text: '一些文字。' }] }]),
+      // Both heading text and body text batched together
+      okJsonResponse([
+        { translations: [{ text: '章节标题' }] },
+        { translations: [{ text: '一些文字。' }] },
+      ]),
     ]);
 
     const result = await translateChapter(markdown, 'en', 'zh-Hans', { fetchFn });
 
-    expect(result).toContain('# Chapter Title');
+    expect(result).toContain('# 章节标题');
     expect(result).toContain('一些文字。');
-    // Only one translate call (heading skipped)
-    expect(fetchFn.calls.length).toBe(2); // 1 auth + 1 translate
+    expect(fetchFn.calls.length).toBe(2); // 1 auth + 1 translate batch
   });
 
   it('skips image markdown', async () => {
@@ -312,13 +315,14 @@ describe('translateChapter batching', () => {
     expect(fetchFn.calls.length).toBe(2);
   });
 
-  it('accumulates across skip paragraphs into one batch', async () => {
+  it('translates headings along with body text in one batch', async () => {
     const markdown = 'Text.\n\n# Heading\n\nMore text.';
     const fetchFn = mockFetch([
       okTextResponse('token'),
-      // Both translatable paragraphs batched together despite heading between them
+      // All 3 translatable items (text, heading text, text) in one batch
       okJsonResponse([
         { translations: [{ text: '文本。' }] },
+        { translations: [{ text: '标题' }] },
         { translations: [{ text: '更多。' }] },
       ]),
     ]);
@@ -326,9 +330,8 @@ describe('translateChapter batching', () => {
     const result = await translateChapter(markdown, 'en', 'zh-Hans', { fetchFn });
 
     expect(result).toContain('文本。');
-    expect(result).toContain('# Heading');
+    expect(result).toContain('# 标题'); // Heading translated with # preserved
     expect(result).toContain('更多。');
-    // Only 1 auth + 1 translate call (not split by heading)
-    expect(fetchFn.calls.length).toBe(2);
+    expect(fetchFn.calls.length).toBe(2); // 1 auth + 1 batch
   });
 });

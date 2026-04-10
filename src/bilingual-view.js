@@ -28,7 +28,7 @@ export function buildBilingualMarkdown(original, translated) {
     const trans = i < transParas.length ? transParas[i] : null;
 
     if (orig) lines.push(orig);
-    if (trans && !isHeading(trans)) lines.push(trans);
+    if (trans) lines.push(trans);
 
     lines.push(''); // blank line separator
   }
