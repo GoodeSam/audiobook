@@ -67,15 +67,21 @@ describe('splitByLanguage', () => {
     expect(result).toEqual([{ text: '你好世界', lang: 'zh' }]);
   });
 
-  it('splits mixed content into segments', () => {
+  it('merges short English words into Chinese context', () => {
+    // Short English words next to Chinese are merged (names, terms)
     const result = splitByLanguage('Hello 你好 World');
+    expect(result.length).toBe(1);
+    expect(result[0].lang).toBe('zh');
+    expect(result[0].text).toContain('你好');
+    expect(result[0].text).toContain('Hello');
+  });
+
+  it('splits long English from Chinese', () => {
+    // Long English passages stay separate
+    const result = splitByLanguage('This is a long English sentence here 你好');
     expect(result.length).toBeGreaterThanOrEqual(2);
-    // First segment should be English
-    expect(result[0].lang).toBe('en');
-    // Should contain a Chinese segment
-    const zhSegment = result.find(s => s.lang === 'zh');
-    expect(zhSegment).toBeDefined();
-    expect(zhSegment.text).toContain('你好');
+    const enSeg = result.find(s => s.lang === 'en');
+    expect(enSeg).toBeDefined();
   });
 
   it('returns empty array for empty text', () => {
@@ -113,5 +119,45 @@ describe('splitByLanguage', () => {
     const result = splitByLanguage('共100页');
     expect(result.length).toBe(1);
     expect(result[0].lang).toBe('zh');
+  });
+
+  it('keeps short English names embedded in Chinese as Chinese', () => {
+    const result = splitByLanguage('苹果公司Apple发布了新产品');
+    expect(result.length).toBe(1);
+    expect(result[0].lang).toBe('zh');
+    expect(result[0].text).toContain('Apple');
+  });
+
+  it('keeps brand names like iPhone in Chinese context', () => {
+    const result = splitByLanguage('他买了一台iPhone 15');
+    expect(result.length).toBe(1);
+    expect(result[0].lang).toBe('zh');
+  });
+
+  it('keeps company names like Google in Chinese context', () => {
+    const result = splitByLanguage('Google是一家美国公司');
+    expect(result.length).toBe(1);
+    expect(result[0].lang).toBe('zh');
+  });
+
+  it('keeps short English abbreviations in Chinese', () => {
+    const result = splitByLanguage('他在MIT读书');
+    expect(result.length).toBe(1);
+    expect(result[0].lang).toBe('zh');
+  });
+
+  it('still splits long English sentences from Chinese', () => {
+    const result = splitByLanguage('前言 This is a full English sentence that should be separate 结尾');
+    expect(result.length).toBeGreaterThan(1);
+    const enSeg = result.find(s => s.lang === 'en');
+    expect(enSeg).toBeDefined();
+    expect(enSeg.text).toContain('This is a full English sentence');
+  });
+
+  it('preserves all text when merging short segments', () => {
+    const input = '使用Python和JavaScript编程';
+    const result = splitByLanguage(input);
+    const reconstructed = result.map(s => s.text).join('');
+    expect(reconstructed).toBe(input);
   });
 });

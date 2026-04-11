@@ -174,19 +174,28 @@ describe('buildChapterSegments', () => {
     expect(segments[0].text).toBe('Real text.');
   });
 
-  it('splits mixed-language paragraph into language segments', () => {
+  it('keeps short English words in Chinese context as one segment', () => {
     const segments = buildChapterSegments({
       originalText: 'Hello 你好世界 goodbye',
       audioMode: 'original',
     });
 
-    // Should produce at least 2 segments: English and Chinese parts
-    expect(segments.length).toBeGreaterThanOrEqual(2);
-    const enSeg = segments.find(s => s.lang === 'en');
-    const zhSeg = segments.find(s => s.lang === 'zh');
-    expect(enSeg).toBeDefined();
-    expect(zhSeg).toBeDefined();
-    expect(zhSeg.text).toContain('你好世界');
+    // Short English words next to Chinese get merged — Chinese TTS reads them naturally
+    expect(segments.length).toBe(1);
+    expect(segments[0].lang).toBe('zh');
+    expect(segments[0].text).toContain('你好世界');
+    expect(segments[0].text).toContain('Hello');
+  });
+
+  it('splits long English passages from Chinese into separate segments', () => {
+    const segments = buildChapterSegments({
+      originalText: 'This is a complete English paragraph with many words here.\n\n这是中文段落。',
+      audioMode: 'original',
+    });
+
+    expect(segments.length).toBe(2);
+    expect(segments[0].lang).toBe('en');
+    expect(segments[1].lang).toBe('zh');
   });
 
   it('keeps pure single-language paragraph as one segment', () => {

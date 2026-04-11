@@ -199,11 +199,6 @@ export function splitIntoParagraphs(text) {
  */
 function splitParaIntoSegments(text, segments) {
   const langSegments = splitByLanguage(text);
-  if (langSegments.length <= 1) {
-    // Single language — use paragraph-level detection
-    segments.push({ text: text.trim(), lang: detectLanguage(text) });
-    return;
-  }
   for (const seg of langSegments) {
     const trimmed = seg.text.trim();
     if (trimmed) {
