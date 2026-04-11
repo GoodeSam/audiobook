@@ -775,6 +775,31 @@ body {
   border-left: 3px solid var(--accent);
 }
 
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.toast-text {
+  flex: 1;
+}
+.toast-copy {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid rgba(0,0,0,0.15);
+  border-radius: 4px;
+  background: rgba(255,255,255,0.6);
+  color: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.toast-copy:hover {
+  opacity: 1;
+}
+
 @keyframes toast-in {
   from { opacity: 0; transform: translateX(1rem); }
   to { opacity: 1; transform: translateX(0); }

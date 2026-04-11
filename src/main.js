@@ -220,7 +220,25 @@ updateConfigSummary();
 function showToast(message, type = 'info', duration = 5000) {
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.textContent = message;
+
+  const text = document.createElement('span');
+  text.className = 'toast-text';
+  text.textContent = message;
+
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'toast-copy';
+  copyBtn.textContent = 'Copy';
+  copyBtn.title = 'Copy message';
+  copyBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(message).then(() => {
+      copyBtn.textContent = 'Copied';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    });
+  });
+
+  toast.appendChild(text);
+  toast.appendChild(copyBtn);
   toastContainer.appendChild(toast);
   setTimeout(() => {
     toast.style.opacity = '0';
