@@ -123,10 +123,11 @@ export async function synthesizeText(text, options = {}) {
           _activeWebSocket = null;
           ws.close();
           if (audioChunks.length === 0) {
+            const voiceLang = langFromVoice(voice);
             reject(new Error(
-              `Edge TTS returned no audio for voice "${voice}".\n` +
-              `Voice language: ${langFromVoice(voice)}\n` +
-              'Try selecting a voice that matches the text language.'
+              `Edge TTS returned no audio for voice "${voice}" (${voiceLang}). ` +
+              'The voice language may not match the text. ' +
+              'Check Settings and select a voice that matches your content language.'
             ));
             return;
           }
@@ -312,8 +313,8 @@ export async function generateChapterAudio(options = {}) {
     if (_cancelled) throw new Error('Audio generation cancelled');
 
     const seg = segments[i];
-    const voice = seg.lang === 'zh' ? voiceZh : voiceEn;
-    const speechRate = seg.lang === 'zh' ? speechRateZh : speechRateEn;
+    let voice = seg.lang === 'zh' ? voiceZh : voiceEn;
+    let speechRate = seg.lang === 'zh' ? speechRateZh : speechRateEn;
 
     let blob;
     for (let attempt = 0; attempt <= SYNTH_MAX_RETRIES; attempt++) {
@@ -321,6 +322,16 @@ export async function generateChapterAudio(options = {}) {
         blob = await synthesizeText(seg.text, { voice, speechRate });
         break;
       } catch (err) {
+        // On "no audio" error, try the other voice as fallback
+        // This handles mismatches where text language doesn't match voice
+        if (attempt === 0 && err.message.includes('returned no audio')) {
+          const fallbackVoice = voice === voiceZh ? voiceEn : voiceZh;
+          const fallbackRate = voice === voiceZh ? speechRateEn : speechRateZh;
+          try {
+            blob = await synthesizeText(seg.text, { voice: fallbackVoice, speechRate: fallbackRate });
+            break;
+          } catch { /* Fall through to normal retry */ }
+        }
         if (attempt === SYNTH_MAX_RETRIES || _cancelled) throw err;
         await new Promise(r => setTimeout(r, 1000));
       }
@@ -346,6 +357,32 @@ export function splitIntoSentences(text) {
     .split(/(?<=[.!?])\s+(?=[A-Z""])|(?<=[.!?])$/)
     .map(s => s.trim())
     .filter(s => s.length > 0);
+}
+
+/**
+ * Validate that voice settings are compatible with the audio mode and content.
+ * Returns a warning message if there's a potential mismatch, null otherwise.
+ *
+ * @param {object} options - { audioMode, voiceEn, voiceZh, hasTranslation, targetLang }
+ * @returns {string|null}
+ */
+export function validateVoiceSettings({ audioMode, voiceEn, voiceZh, hasTranslation, targetLang }) {
+  const enLang = langFromVoice(voiceEn);
+  const zhLang = langFromVoice(voiceZh);
+
+  if (audioMode === 'translated' && !hasTranslation) {
+    return 'Chapter has not been translated yet. Translate first or switch to "Original" mode.';
+  }
+
+  if (audioMode === 'translated' && targetLang?.startsWith('zh') && !zhLang.startsWith('zh')) {
+    return `Chinese translation will be read by voice "${voiceZh}" which is not a Chinese voice. Select a Chinese voice in settings.`;
+  }
+
+  if (audioMode === 'translated' && !targetLang?.startsWith('zh') && targetLang === 'en' && !enLang.startsWith('en')) {
+    return `English translation will be read by voice "${voiceEn}" which is not an English voice. Select an English voice in settings.`;
+  }
+
+  return null;
 }
 
 /**

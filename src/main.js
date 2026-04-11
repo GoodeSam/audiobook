@@ -7,7 +7,7 @@
 import { parseEPUB } from './epub-parser.js';
 import { parsePDF } from './pdf-parser.js';
 import { htmlToMarkdown, cleanMarkdown } from './html-to-markdown.js';
-import { generateChapterAudio, cancelGeneration, synthesizeText } from './edge-tts.js';
+import { generateChapterAudio, cancelGeneration, synthesizeText, validateVoiceSettings } from './edge-tts.js';
 import { translateChapter, cancelTranslation, resetTranslationState } from './ms-translator.js';
 import { sanitizeFilename, exportMultipleChapters } from './chapter-export.js';
 import { ProgressTracker } from './progress-tracker.js';
@@ -786,10 +786,20 @@ async function generateSingleChapter(idx) {
   const ch = state.book.chapters[idx];
   const mode = audioModeSelect.value;
 
+  // Validate voice settings before starting
+  const warning = validateVoiceSettings({
+    audioMode: mode,
+    voiceEn: voiceEnSelect.value,
+    voiceZh: voiceZhSelect.value,
+    hasTranslation: !!ch.translatedMarkdown,
+    targetLang: translateLangSelect.value,
+  });
+  if (warning) showToast(warning, 'info', 6000);
+
   // Check if translation is needed
   if ((mode === 'translated' || mode === 'bilingual') && !ch.translatedMarkdown) {
     await translateSingleChapter(idx);
-    if (!ch.translatedMarkdown) return; // Translation failed or cancelled
+    if (!ch.translatedMarkdown) return;
   }
 
   state.generating = true;
