@@ -6,7 +6,9 @@
 
 import { parseEPUB } from './epub-parser.js';
 import { parsePDF } from './pdf-parser.js';
+import { parseDOCX } from './docx-parser.js';
 import { htmlToMarkdown, cleanMarkdown } from './html-to-markdown.js';
+import { isSpeechRecognitionSupported, createSpeechRecognition } from './speech-to-text.js';
 import { generateChapterAudio, cancelGeneration, synthesizeText, validateVoiceSettings } from './edge-tts.js';
 import { translateChapter, cancelTranslation, resetTranslationState } from './ms-translator.js';
 import { sanitizeFilename, exportMultipleChapters } from './chapter-export.js';
@@ -69,9 +71,9 @@ const toastContainer = $('toast-container');
 
 const DROP_ZONE_DEFAULT = `
   <div class="drop-icon">📖</div>
-  <p>Drag & drop an EPUB or PDF file here</p>
+  <p>Drag & drop an EPUB, PDF, or DOCX file here</p>
   <p class="or">or</p>
-  <label class="file-btn">Choose File<input type="file" accept=".epub,.pdf" hidden></label>
+  <label class="file-btn">Choose File<input type="file" accept=".epub,.pdf,.docx" hidden></label>
 `;
 
 function resetDropZone(errorMsg) {
@@ -81,7 +83,7 @@ function resetDropZone(errorMsg) {
       <div class="drop-icon">📖</div>
       <p style="color: var(--danger)">Error: ${safe}</p>
       <p class="or">Try another file</p>
-      <label class="file-btn">Choose File<input type="file" accept=".epub,.pdf" hidden></label>
+      <label class="file-btn">Choose File<input type="file" accept=".epub,.pdf,.docx" hidden></label>
     `;
   } else {
     dropZone.innerHTML = DROP_ZONE_DEFAULT;
@@ -102,7 +104,7 @@ dropZone.addEventListener('drop', (e) => {
   dropZone.classList.remove('drag-over');
   const file = e.dataTransfer.files[0];
   const name = file?.name.toLowerCase() || '';
-  if (name.endsWith('.epub') || name.endsWith('.pdf')) handleFile(file);
+  if (name.endsWith('.epub') || name.endsWith('.pdf') || name.endsWith('.docx')) handleFile(file);
 });
 
 // Use event delegation so it works after innerHTML replacements.
@@ -141,13 +143,19 @@ async function handleFile(file) {
     cancelTranslation();
     hideProgress();
 
-    const isPDF = file.name.toLowerCase().endsWith('.pdf');
-    dropZone.innerHTML = `<p>Parsing ${isPDF ? 'PDF' : 'EPUB'}...</p>`;
+    const ext = file.name.toLowerCase().split('.').pop();
+    const formatName = { pdf: 'PDF', epub: 'EPUB', docx: 'DOCX' }[ext] || 'file';
+    dropZone.innerHTML = `<p>Parsing ${formatName}...</p>`;
 
     let book;
-    if (isPDF) {
+    if (ext === 'pdf') {
       book = await parsePDF(file);
-      // PDF parser returns markdown directly — just clean it
+      for (const ch of book.chapters) {
+        ch.markdown = cleanMarkdown(ch.markdown);
+        ch.translatedMarkdown = null;
+      }
+    } else if (ext === 'docx') {
+      book = await parseDOCX(file);
       for (const ch of book.chapters) {
         ch.markdown = cleanMarkdown(ch.markdown);
         ch.translatedMarkdown = null;
@@ -1199,3 +1207,119 @@ document.addEventListener('keydown', (e) => {
     }
   }
 });
+
+// ── Speech-to-text ──
+
+const btnStt = $('btn-stt');
+const sttLangSelect = $('stt-lang-select');
+const sttStatus = $('stt-status');
+const sttStatusText = $('stt-status-text');
+const sttPreview = $('stt-preview');
+const sttTranscript = $('stt-transcript');
+const btnSttClear = $('btn-stt-clear');
+const btnSttUse = $('btn-stt-use');
+const sttControls = $('stt-controls');
+
+let sttSession = null;
+let sttActive = false;
+
+// Hide STT controls if not supported
+if (!isSpeechRecognitionSupported()) {
+  const sttSection = document.querySelector('.stt-section');
+  if (sttSection) sttSection.hidden = true;
+}
+
+if (btnStt) {
+  btnStt.addEventListener('click', () => {
+    if (sttActive) {
+      stopSTT();
+    } else {
+      startSTT();
+    }
+  });
+}
+
+function startSTT() {
+  const lang = sttLangSelect?.value || 'en-US';
+  try {
+    sttSession = createSpeechRecognition({
+      lang,
+      continuous: true,
+      interimResults: true,
+      onResult: (transcript, isFinal) => {
+        if (isFinal) {
+          // Append final result
+          const current = sttTranscript.value;
+          sttTranscript.value = current + (current ? ' ' : '') + transcript;
+        }
+        // Show preview area
+        sttPreview.hidden = false;
+      },
+      onEnd: () => {
+        // Continuous mode may stop on silence — restart if still active
+        if (sttActive) {
+          try { sttSession.start(); } catch (_) { stopSTT(); }
+        }
+      },
+      onError: (event) => {
+        if (event.error === 'not-allowed') {
+          showToast('Microphone access denied. Please allow microphone permissions.', 'error');
+          stopSTT();
+        } else if (event.error !== 'no-speech' && event.error !== 'aborted') {
+          showToast(`Speech recognition error: ${event.error}`, 'error');
+          stopSTT();
+        }
+      },
+    });
+    sttSession.start();
+    sttActive = true;
+    btnStt.innerHTML = '<span class="stt-mic recording">🎤</span> Stop Dictation';
+    btnStt.classList.add('recording');
+    sttStatus.hidden = false;
+    sttStatusText.textContent = 'Listening...';
+    sttPreview.hidden = false;
+  } catch (err) {
+    showToast('Failed to start speech recognition: ' + err.message, 'error');
+  }
+}
+
+function stopSTT() {
+  sttActive = false;
+  if (sttSession) {
+    try { sttSession.stop(); } catch (_) { /* ignore */ }
+    sttSession = null;
+  }
+  btnStt.innerHTML = '<span class="stt-mic">🎤</span> Start Dictation';
+  btnStt.classList.remove('recording');
+  sttStatus.hidden = true;
+}
+
+if (btnSttClear) {
+  btnSttClear.addEventListener('click', () => {
+    sttTranscript.value = '';
+  });
+}
+
+if (btnSttUse) {
+  btnSttUse.addEventListener('click', () => {
+    const text = sttTranscript.value.trim();
+    if (!text) {
+      showToast('No transcribed text to use', 'error');
+      return;
+    }
+    stopSTT();
+
+    // Create a book from the transcribed text
+    const book = {
+      title: 'Dictation',
+      chapters: [{ title: 'Dictation', markdown: text, translatedMarkdown: null }],
+    };
+
+    resetStateForNewBook(state, book);
+    _renderCache.clear();
+    _previewCache.clear();
+    sttTranscript.value = '';
+    sttPreview.hidden = true;
+    showReaderScreen();
+  });
+}

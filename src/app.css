@@ -106,6 +106,113 @@ body {
   background: var(--accent-hover);
 }
 
+/* ── Speech-to-Text Section ── */
+
+.stt-section {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  width: 100%;
+}
+
+.stt-controls {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.stt-lang-select {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.stt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 1.2rem;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.95rem;
+  transition: background 0.2s;
+}
+.stt-btn:hover {
+  background: var(--accent-hover);
+}
+.stt-btn.recording {
+  background: var(--danger);
+}
+.stt-btn.recording:hover {
+  background: #c0392b;
+}
+
+.stt-mic.recording {
+  animation: pulse-mic 1s ease-in-out infinite;
+}
+
+@keyframes pulse-mic {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.stt-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.stt-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: pulse-mic 1s ease-in-out infinite;
+}
+
+.stt-preview {
+  margin-top: 1rem;
+  width: 100%;
+}
+
+.stt-transcript {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: var(--text);
+  resize: vertical;
+  line-height: 1.5;
+}
+.stt-transcript:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.stt-preview-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-top: 0.75rem;
+}
+
 /* ── Reader Screen ── */
 
 #reader-screen {
