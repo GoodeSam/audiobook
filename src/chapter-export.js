@@ -21,6 +21,35 @@ export function sanitizeFilename(name) {
 }
 
 /**
+ * Extract base64 data-URI images from markdown, returning cleaned markdown
+ * with relative path references and an array of image file descriptors.
+ *
+ * @param {string} markdown
+ * @param {string} [imageDir='images'] - Directory name for image references.
+ * @returns {{ markdown: string, images: Array<{filename: string, data: Uint8Array}> }}
+ */
+export function extractImagesFromMarkdown(markdown, imageDir = 'images') {
+  const images = [];
+  let counter = 0;
+
+  const cleaned = markdown.replace(
+    /!\[([^\]]*)\]\((data:(image\/([^;]+));base64,([^)]+))\)/g,
+    (_match, alt, _fullDataUrl, _mime, subtype, base64Data) => {
+      counter++;
+      const ext = subtype === 'svg+xml' ? 'svg'
+        : subtype === 'jpeg' ? 'jpg'
+        : subtype;
+      const filename = `image-${String(counter).padStart(3, '0')}.${ext}`;
+      const binary = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+      images.push({ filename, data: binary });
+      return `![${alt}](${imageDir}/${filename})`;
+    }
+  );
+
+  return { markdown: cleaned, images };
+}
+
+/**
  * Export a single chapter as a markdown file descriptor.
  * @param {{ title: string, markdown: string }} chapter
  * @returns {{ filename: string, content: string }}

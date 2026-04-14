@@ -11,7 +11,7 @@ import { htmlToMarkdown, cleanMarkdown } from './html-to-markdown.js';
 import { isSpeechRecognitionSupported, createSpeechRecognition } from './speech-to-text.js';
 import { generateChapterAudio, cancelGeneration, synthesizeText, validateVoiceSettings } from './edge-tts.js';
 import { translateChapter, cancelTranslation, resetTranslationState } from './ms-translator.js';
-import { sanitizeFilename, exportMultipleChapters } from './chapter-export.js';
+import { sanitizeFilename, exportMultipleChapters, extractImagesFromMarkdown } from './chapter-export.js';
 import { ProgressTracker } from './progress-tracker.js';
 import { buildBilingualMarkdown } from './bilingual-view.js';
 import { createAppState, resetStateForNewBook, resetStateOnError } from './app-state.js';
@@ -1009,21 +1009,35 @@ btnDownloadChapter.addEventListener('click', () => {
   downloadBlob(blob, `${sanitizeFilename(ch.title)}.mp3`);
 });
 
-btnDownloadMd.addEventListener('click', () => {
+btnDownloadMd.addEventListener('click', async () => {
   if (state.activeChapter === null) return;
   const ch = state.book.chapters[state.activeChapter];
   const safeName = sanitizeFilename(ch.title);
 
+  let md, filename;
   if (state.activeTab === 'translated' && ch.translatedMarkdown) {
-    const blob = new Blob([ch.translatedMarkdown], { type: 'text/markdown' });
-    downloadBlob(blob, `${safeName}_translated.md`);
+    md = ch.translatedMarkdown;
+    filename = `${safeName}_translated`;
   } else if (state.activeTab === 'bilingual' && ch.translatedMarkdown) {
-    const bilingual = buildBilingualMarkdown(ch.markdown, ch.translatedMarkdown);
-    const blob = new Blob([bilingual], { type: 'text/markdown' });
-    downloadBlob(blob, `${safeName}_bilingual.md`);
+    md = buildBilingualMarkdown(ch.markdown, ch.translatedMarkdown);
+    filename = `${safeName}_bilingual`;
   } else {
-    const blob = new Blob([ch.markdown], { type: 'text/markdown' });
-    downloadBlob(blob, `${safeName}.md`);
+    md = ch.markdown;
+    filename = safeName;
+  }
+
+  const { markdown, images } = extractImagesFromMarkdown(md);
+
+  if (images.length === 0) {
+    const blob = new Blob([markdown], { type: 'text/markdown' });
+    downloadBlob(blob, `${filename}.md`);
+  } else {
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    zip.file(`${filename}.md`, markdown);
+    for (const img of images) zip.file(`images/${img.filename}`, img.data);
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    downloadBlob(zipBlob, `${filename}.zip`);
   }
 });
 
@@ -1038,15 +1052,26 @@ btnExportSelected.addEventListener('click', async () => {
       includeBilingual: hasTranslations,
     });
 
-    if (files.length === 1) {
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    let hasImages = false;
+
+    for (const f of files) {
+      const stem = f.filename.replace(/\.md$/, '');
+      const { markdown, images } = extractImagesFromMarkdown(f.content, `images/${stem}`);
+      zip.file(f.filename, markdown);
+      for (const img of images) {
+        zip.file(`images/${stem}/${img.filename}`, img.data);
+        hasImages = true;
+      }
+    }
+
+    if (files.length === 1 && !hasImages) {
       const blob = new Blob([files[0].content], { type: 'text/markdown' });
       downloadBlob(blob, files[0].filename);
       return;
     }
 
-    const JSZip = (await import('jszip')).default;
-    const zip = new JSZip();
-    for (const f of files) zip.file(f.filename, f.content);
     const zipBlob = await zip.generateAsync({ type: 'blob' });
     downloadBlob(zipBlob, `${sanitizeFilename(state.book.title)}_chapters.zip`);
   } catch (err) {
@@ -1066,11 +1091,22 @@ btnDownloadAll.addEventListener('click', async () => {
     for (let i = 0; i < chapters.length; i++) {
       const prefix = String(i + 1).padStart(3, '0');
       const safeName = sanitizeFilename(chapters[i].title);
-      if (blobs[i]) zip.file(`${prefix}_${safeName}.mp3`, blobs[i]);
-      zip.file(`${prefix}_${safeName}.md`, chapters[i].markdown);
+      const stem = `${prefix}_${safeName}`;
+      if (blobs[i]) zip.file(`${stem}.mp3`, blobs[i]);
+
+      const { markdown: md, images } = extractImagesFromMarkdown(chapters[i].markdown, `images/${stem}`);
+      zip.file(`${stem}.md`, md);
+      for (const img of images) zip.file(`images/${stem}/${img.filename}`, img.data);
+
       if (chapters[i].translatedMarkdown) {
-        zip.file(`${prefix}_${safeName}_translated.md`, chapters[i].translatedMarkdown);
-        zip.file(`${prefix}_${safeName}_bilingual.md`, buildBilingualMarkdown(chapters[i].markdown, chapters[i].translatedMarkdown));
+        const trans = extractImagesFromMarkdown(chapters[i].translatedMarkdown, `images/${stem}`);
+        zip.file(`${stem}_translated.md`, trans.markdown);
+        for (const img of trans.images) zip.file(`images/${stem}/${img.filename}`, img.data);
+
+        const bilingual = buildBilingualMarkdown(chapters[i].markdown, chapters[i].translatedMarkdown);
+        const bil = extractImagesFromMarkdown(bilingual, `images/${stem}`);
+        zip.file(`${stem}_bilingual.md`, bil.markdown);
+        for (const img of bil.images) zip.file(`images/${stem}/${img.filename}`, img.data);
       }
     }
 

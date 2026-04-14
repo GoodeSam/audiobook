@@ -3,6 +3,7 @@ import {
   sanitizeFilename,
   exportChapterAsMarkdown,
   exportMultipleChapters,
+  extractImagesFromMarkdown,
 } from './chapter-export.js';
 
 describe('sanitizeFilename', () => {
@@ -136,5 +137,72 @@ describe('exportMultipleChapters', () => {
     const result = exportMultipleChapters(chaps, [0], { includeBilingual: true });
 
     expect(result.length).toBe(1); // Only original
+  });
+});
+
+describe('extractImagesFromMarkdown', () => {
+  // Tiny 1x1 red PNG as base64
+  const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+
+  it('returns unchanged markdown when no images present', () => {
+    const md = '# Title\n\nSome text.';
+    const result = extractImagesFromMarkdown(md);
+
+    expect(result.markdown).toBe(md);
+    expect(result.images).toEqual([]);
+  });
+
+  it('extracts a single PNG data URI image', () => {
+    const md = `# Title\n\n![photo](data:image/png;base64,${pngBase64})\n\nMore text.`;
+    const result = extractImagesFromMarkdown(md);
+
+    expect(result.markdown).toBe('# Title\n\n![photo](images/image-001.png)\n\nMore text.');
+    expect(result.images.length).toBe(1);
+    expect(result.images[0].filename).toBe('image-001.png');
+    expect(result.images[0].data).toBeInstanceOf(Uint8Array);
+    expect(result.images[0].data.length).toBeGreaterThan(0);
+  });
+
+  it('extracts multiple images with sequential names', () => {
+    const md = `![a](data:image/png;base64,${pngBase64})\n\n![b](data:image/jpeg;base64,${pngBase64})`;
+    const result = extractImagesFromMarkdown(md);
+
+    expect(result.images.length).toBe(2);
+    expect(result.images[0].filename).toBe('image-001.png');
+    expect(result.images[1].filename).toBe('image-002.jpg');
+    expect(result.markdown).toContain('![a](images/image-001.png)');
+    expect(result.markdown).toContain('![b](images/image-002.jpg)');
+  });
+
+  it('handles SVG images', () => {
+    const svgBase64 = btoa('<svg></svg>');
+    const md = `![icon](data:image/svg+xml;base64,${svgBase64})`;
+    const result = extractImagesFromMarkdown(md);
+
+    expect(result.images[0].filename).toBe('image-001.svg');
+  });
+
+  it('uses custom image directory', () => {
+    const md = `![pic](data:image/png;base64,${pngBase64})`;
+    const result = extractImagesFromMarkdown(md, 'assets');
+
+    expect(result.markdown).toBe('![pic](assets/image-001.png)');
+  });
+
+  it('preserves non-data-URI image references', () => {
+    const md = '![photo](https://example.com/photo.png)';
+    const result = extractImagesFromMarkdown(md);
+
+    expect(result.markdown).toBe(md);
+    expect(result.images).toEqual([]);
+  });
+
+  it('preserves surrounding text and formatting', () => {
+    const md = `**Bold** text.\n\n![img](data:image/gif;base64,${pngBase64})\n\n*Italic* text.`;
+    const result = extractImagesFromMarkdown(md);
+
+    expect(result.markdown).toContain('**Bold** text.');
+    expect(result.markdown).toContain('*Italic* text.');
+    expect(result.markdown).toContain('![img](images/image-001.gif)');
   });
 });
