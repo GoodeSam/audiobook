@@ -1110,6 +1110,19 @@ btnDownloadAll.addEventListener('click', async () => {
       }
     }
 
+    const mp3Blobs = chapters.map((_, i) => blobs[i]).filter(Boolean);
+    if (mp3Blobs.length > 1) {
+      const arrayBuffers = await Promise.all(mp3Blobs.map(b => b.arrayBuffer()));
+      const totalLength = arrayBuffers.reduce((sum, ab) => sum + ab.byteLength, 0);
+      const merged = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const ab of arrayBuffers) {
+        merged.set(new Uint8Array(ab), offset);
+        offset += ab.byteLength;
+      }
+      zip.file(`${sanitizeFilename(state.book.title)}_complete.mp3`, new Blob([merged], { type: 'audio/mpeg' }));
+    }
+
     const zipBlob = await zip.generateAsync({ type: 'blob' });
     downloadBlob(zipBlob, `${sanitizeFilename(state.book.title)}.zip`);
   } catch (err) {
