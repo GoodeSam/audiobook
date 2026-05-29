@@ -7,6 +7,7 @@
 import { parseEPUB } from './epub-parser.js';
 import { parsePDF } from './pdf-parser.js';
 import { parseDOCX } from './docx-parser.js';
+import { parseHTML } from './html-parser.js';
 import { htmlToMarkdown, cleanMarkdown } from './html-to-markdown.js';
 import { isSpeechRecognitionSupported, createSpeechRecognition } from './speech-to-text.js';
 import { generateChapterAudio, cancelGeneration, synthesizeText, validateVoiceSettings } from './edge-tts.js';
@@ -71,9 +72,9 @@ const toastContainer = $('toast-container');
 
 const DROP_ZONE_DEFAULT = `
   <div class="drop-icon">📖</div>
-  <p>Drag & drop an EPUB, PDF, or DOCX file here</p>
+  <p>Drag & drop an EPUB, PDF, DOCX, or HTML file here</p>
   <p class="or">or</p>
-  <label class="file-btn">Choose File<input type="file" accept=".epub,.pdf,.docx" hidden></label>
+  <label class="file-btn">Choose File<input type="file" accept=".epub,.pdf,.docx,.html,.htm" hidden></label>
 `;
 
 function resetDropZone(errorMsg) {
@@ -83,7 +84,7 @@ function resetDropZone(errorMsg) {
       <div class="drop-icon">📖</div>
       <p style="color: var(--danger)">Error: ${safe}</p>
       <p class="or">Try another file</p>
-      <label class="file-btn">Choose File<input type="file" accept=".epub,.pdf,.docx" hidden></label>
+      <label class="file-btn">Choose File<input type="file" accept=".epub,.pdf,.docx,.html,.htm" hidden></label>
     `;
   } else {
     dropZone.innerHTML = DROP_ZONE_DEFAULT;
@@ -104,7 +105,7 @@ dropZone.addEventListener('drop', (e) => {
   dropZone.classList.remove('drag-over');
   const file = e.dataTransfer.files[0];
   const name = file?.name.toLowerCase() || '';
-  if (name.endsWith('.epub') || name.endsWith('.pdf') || name.endsWith('.docx')) handleFile(file);
+  if (name.endsWith('.epub') || name.endsWith('.pdf') || name.endsWith('.docx') || name.endsWith('.html') || name.endsWith('.htm')) handleFile(file);
 });
 
 // Use event delegation so it works after innerHTML replacements.
@@ -144,7 +145,7 @@ async function handleFile(file) {
     hideProgress();
 
     const ext = file.name.toLowerCase().split('.').pop();
-    const formatName = { pdf: 'PDF', epub: 'EPUB', docx: 'DOCX' }[ext] || 'file';
+    const formatName = { pdf: 'PDF', epub: 'EPUB', docx: 'DOCX', html: 'HTML', htm: 'HTML' }[ext] || 'file';
     dropZone.innerHTML = `<p>Parsing ${formatName}...</p>`;
 
     let book;
@@ -156,6 +157,12 @@ async function handleFile(file) {
       }
     } else if (ext === 'docx') {
       book = await parseDOCX(file);
+      for (const ch of book.chapters) {
+        ch.markdown = cleanMarkdown(ch.markdown);
+        ch.translatedMarkdown = null;
+      }
+    } else if (ext === 'html' || ext === 'htm') {
+      book = await parseHTML(file);
       for (const ch of book.chapters) {
         ch.markdown = cleanMarkdown(ch.markdown);
         ch.translatedMarkdown = null;
