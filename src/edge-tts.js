@@ -4,10 +4,11 @@
  * Ported from EasyOriginals' book-audio.js. Provides free text-to-speech
  * synthesis via the Edge browser's built-in TTS service.
  *
- * Supports dual voice/speed for Chinese and English, with three audio modes:
+ * Supports dual voice/speed for Chinese and English, with four audio modes:
  * - original: speak the original text
  * - translated: speak the translated text
  * - bilingual: interleave original and translated per paragraph
+ * - en-zh-en: per paragraph: original → translation → original again
  */
 
 import { detectLanguage, splitByLanguage } from './language-utils.js';
@@ -215,7 +216,7 @@ function splitParaIntoSegments(text, segments) {
  * @param {object} options
  * @param {string} options.originalText - Original chapter markdown.
  * @param {string} [options.translatedText] - Translated chapter markdown.
- * @param {'original'|'translated'|'bilingual'} options.audioMode
+ * @param {'original'|'translated'|'bilingual'|'en-zh-en'} options.audioMode
  * @returns {Array<{text: string, lang: 'zh'|'en'}>}
  */
 export function buildChapterSegments({ originalText, translatedText, audioMode }) {
@@ -241,6 +242,16 @@ export function buildChapterSegments({ originalText, translatedText, audioMode }
         const cleanTrans = stripMarkdown(transParas[i]);
         if (cleanTrans.trim()) splitParaIntoSegments(cleanTrans, segments);
       }
+    }
+  } else if (audioMode === 'en-zh-en') {
+    // Per paragraph: original → translation → original again
+    const maxLen = Math.max(origParas.length, transParas.length);
+    for (let i = 0; i < maxLen; i++) {
+      const cleanOrig = i < origParas.length ? stripMarkdown(origParas[i]) : '';
+      const cleanTrans = i < transParas.length ? stripMarkdown(transParas[i]) : '';
+      if (cleanOrig.trim()) splitParaIntoSegments(cleanOrig, segments);
+      if (cleanTrans.trim()) splitParaIntoSegments(cleanTrans, segments);
+      if (cleanOrig.trim()) splitParaIntoSegments(cleanOrig, segments);
     }
   } else {
     // 'original' mode (default)
@@ -370,7 +381,7 @@ export function validateVoiceSettings({ audioMode, voiceEn, voiceZh, hasTranslat
   const enLang = langFromVoice(voiceEn);
   const zhLang = langFromVoice(voiceZh);
 
-  if (audioMode === 'translated' && !hasTranslation) {
+  if ((audioMode === 'translated' || audioMode === 'bilingual' || audioMode === 'en-zh-en') && !hasTranslation) {
     return 'Chapter has not been translated yet. Translate first or switch to "Original" mode.';
   }
 

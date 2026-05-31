@@ -220,7 +220,7 @@ btnToggleSettings.addEventListener('click', () => {
 });
 
 function updateConfigSummary() {
-  const modeLabels = { original: 'Original', translated: 'Translated', bilingual: 'Bilingual' };
+  const modeLabels = { original: 'Original', translated: 'Translated', bilingual: 'Bilingual', 'en-zh-en': 'EN→ZH→EN' };
   summaryMode.textContent = modeLabels[audioModeSelect.value] || 'Bilingual';
   const langEl = translateLangSelect.selectedOptions[0];
   summaryLang.textContent = '→ ' + (langEl ? langEl.textContent : 'Chinese');
@@ -830,7 +830,7 @@ async function generateSingleChapter(idx) {
   if (warning) showToast(warning, 'info', 6000);
 
   // Check if translation is needed
-  if ((mode === 'translated' || mode === 'bilingual') && !ch.translatedMarkdown) {
+  if ((mode === 'translated' || mode === 'bilingual' || mode === 'en-zh-en') && !ch.translatedMarkdown) {
     await translateSingleChapter(idx);
     if (!ch.translatedMarkdown) return;
   }
@@ -888,7 +888,7 @@ async function generateSingleChapter(idx) {
 async function generateMultipleChapters(indices) {
   const mode = audioModeSelect.value;
   const total = indices.length;
-  const needsTranslation = mode === 'translated' || mode === 'bilingual';
+  const needsTranslation = mode === 'translated' || mode === 'bilingual' || mode === 'en-zh-en';
   const toTranslate = needsTranslation
     ? indices.filter(i => !state.book.chapters[i].translatedMarkdown || state.translationCheckpoints[i])
     : [];
@@ -951,7 +951,7 @@ async function generateMultipleChapters(indices) {
     // Phase 2: Generate audio — recompute list to skip chapters with failed translations
     const readyToGenerate = toGenerate.filter(i => {
       const ch = state.book.chapters[i];
-      if ((mode === 'translated' || mode === 'bilingual') && !ch.translatedMarkdown) return false;
+      if ((mode === 'translated' || mode === 'bilingual' || mode === 'en-zh-en') && !ch.translatedMarkdown) return false;
       return true;
     });
     if (readyToGenerate.length > 0) {
