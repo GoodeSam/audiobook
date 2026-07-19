@@ -134,4 +134,9 @@ Ran 2 shell commands
 
 ---
 
-对于目前的我在 在 #admin 生成音频，用户在
+对于目前的我在 在 #admin 生成音频，用户在 [https://audiobook.tumei.online 获得指定的音频 ，对于这个过程进行优化](https://audiobook.tumei.online)
+
+---
+
+对于音频中英语和汉语的翻译，可以是逐句，也可以是逐段进行翻译
+

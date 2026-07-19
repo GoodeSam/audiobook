@@ -1488,3 +1488,87 @@ body.admin-mode .user-only {
 body.user-mode .chapter-cb {
   display: none;
 }
+
+/* ── Admin: one-click publish + remote management ── */
+
+.publish-site-btn {
+  margin-top: 8px;
+  background: #2e8b57;
+}
+
+.publish-site-btn:hover {
+  background: #257048;
+}
+
+.modal-card {
+  text-align: left;
+  max-width: 420px;
+  width: calc(100vw - 48px);
+}
+
+.modal-info {
+  color: var(--text-secondary, #666);
+  font-size: 0.9rem;
+  margin: 4px 0 10px;
+}
+
+.modal-label {
+  display: block;
+  font-size: 0.85rem;
+  margin: 10px 0 4px;
+  color: var(--text-secondary, #666);
+}
+
+.modal-card input[type="text"],
+.modal-card input[type="password"],
+.modal-card textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  font-size: 0.95rem;
+  font-family: inherit;
+}
+
+.modal-card textarea {
+  resize: vertical;
+}
+
+.modal-status {
+  min-height: 1.2em;
+  font-size: 0.85rem;
+  color: var(--danger);
+  margin: 8px 0 0;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.shelf-admin-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  background: var(--bg-secondary, #f4f6f9);
+  border-radius: 8px;
+}
+
+.valid-codes-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary, #666);
+  word-break: break-all;
+}
+
+.library-delete {
+  color: var(--danger);
+}

@@ -39,6 +39,10 @@
           <h2 class="library-title">📚 我的书架 <span id="shelf-code-label" class="shelf-code"></span></h2>
           <button id="btn-logout" class="small-btn user-only">退出</button>
         </div>
+        <div id="shelf-admin-tools" class="shelf-admin-tools admin-only" hidden>
+          <span id="valid-codes-label" class="valid-codes-label"></span>
+          <button id="btn-manage-codes" class="small-btn">🔑 访问码管理</button>
+        </div>
         <ul id="shelf-list" class="library-list"></ul>
         <p id="shelf-empty" class="shelf-empty" hidden>书架还是空的 — 联系管理员为你添加书籍</p>
       </div>
@@ -231,8 +235,9 @@
             <button id="btn-generate-selected" class="secondary-btn" title="Generate MP3 only">MP3 Only</button>
             <button id="btn-export-selected" class="secondary-btn" title="Export Markdown">Export MD</button>
             <button id="btn-download-all" class="secondary-btn" title="Download all as ZIP" disabled>Download ZIP</button>
-            <button id="btn-export-publish" class="secondary-btn" title="Export publish package for the remote library">Publish ZIP</button>
+            <button id="btn-export-publish" class="secondary-btn" title="Fallback: export the publish package as a ZIP for deploy/publish-book.sh">Publish ZIP</button>
           </div>
+          <button id="btn-publish-site" class="primary-cta publish-site-btn admin-only" title="一键发布到 audiobook.tumei.online — 用户书架立即可见">🚀 发布到网站</button>
         </div>
         <ul id="chapter-list" class="chapter-list" role="listbox" aria-label="Book chapters"></ul>
       </aside>
@@ -267,6 +272,46 @@
           <div id="chapter-markdown" class="markdown-content" role="tabpanel"></div>
         </div>
       </main>
+    </div>
+
+    <!-- Publish-to-site modal (admin) -->
+    <div id="publish-modal" class="progress-overlay" hidden>
+      <div class="progress-card modal-card" role="dialog" aria-modal="true" aria-labelledby="publish-modal-title">
+        <h3 id="publish-modal-title">🚀 发布到 audiobook.tumei.online</h3>
+        <p id="publish-modal-info" class="modal-info"></p>
+        <label class="modal-label">访问码（逗号分隔；留空或 public 为所有人可见）
+          <input id="publish-access-input" type="text" placeholder="alice, bob 或 public" autocomplete="off" autocapitalize="off">
+        </label>
+        <label class="modal-label">管理员密码（保存在本机，只需输入一次）
+          <input id="publish-token-input" type="password" placeholder="管理员密码" autocomplete="off">
+        </label>
+        <div class="progress-bar-container" id="publish-progress-row" hidden>
+          <div id="publish-progress-bar" class="progress-bar"></div>
+          <span id="publish-progress-percent" class="progress-percent">0%</span>
+        </div>
+        <p id="publish-modal-status" class="modal-status" aria-live="polite"></p>
+        <div class="modal-actions">
+          <button id="btn-publish-cancel" class="action-btn">取消</button>
+          <button id="btn-publish-confirm" class="action-btn listen-btn">发布</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Generic single-field editor modal (admin: book access / valid codes) -->
+    <div id="field-modal" class="progress-overlay" hidden>
+      <div class="progress-card modal-card" role="dialog" aria-modal="true" aria-labelledby="field-modal-title">
+        <h3 id="field-modal-title"></h3>
+        <p id="field-modal-hint" class="modal-info"></p>
+        <textarea id="field-modal-input" rows="3" autocomplete="off" autocapitalize="off"></textarea>
+        <label class="modal-label" id="field-modal-token-row" hidden>管理员密码
+          <input id="field-modal-token" type="password" placeholder="管理员密码" autocomplete="off">
+        </label>
+        <p id="field-modal-status" class="modal-status" aria-live="polite"></p>
+        <div class="modal-actions">
+          <button id="btn-field-cancel" class="action-btn">取消</button>
+          <button id="btn-field-save" class="action-btn listen-btn">保存</button>
+        </div>
+      </div>
     </div>
 
     <!-- Toast container for non-blocking notifications -->

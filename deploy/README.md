@@ -44,25 +44,35 @@ bash deploy/deploy-tumei.sh
 - **管理员模式**：打开 `https://audiobook.tumei.online/#admin`（或本地开发地址加 `#admin`，
   会记住状态；`#user` 切回）。拥有完整生成功能。
 
-发布一本书的完整流程：
+### 发布一本书（一键，全程在浏览器）
 1. 管理员模式里上传书籍 → 翻译 → 生成各章 MP3。
-2. 侧栏点 **Publish ZIP**，下载 `<bookId>_publish.zip`（含 book.json + 各章 MP3 + 时间线）。
-3. 本机执行：
+2. 侧栏点 **🚀 发布到网站** → 填访问码（逗号分隔，留空/public 为公开）→
+   输入管理员密码（`deploy/admin-password.txt`，浏览器记住后无需再输）→ 发布。
+   上传带进度条，完成后用户书架立即可见。
+3. 书架（管理员视角）里每本书有 **✏️ 权限**（改可见访问码）和 **🗑**（下架）；
+   **🔑 访问码管理** 可增删可登录的访问码。
+
+以上由服务器上的管理 API 支撑（`deploy/library-api.py`，systemd 服务
+`audiobook-api`，127.0.0.1:8791，nginx 反代 `/api/`，请求头 `X-Admin-Token`
+校验管理员密码）。改过 `library-api.py` 后执行 `bash deploy/setup-api.sh`
+重新安装（首次安装亦然）。
+
+### 命令行备用流程（浏览器不可用时）
+1. 侧栏点 **Publish ZIP**，下载 `<bookId>_publish.zip`。
+2. 本机执行：
    ```bash
    bash deploy/publish-book.sh ~/Downloads/<bookId>_publish.zip 访问码1,访问码2
-   # 或所有登录用户可见：
-   bash deploy/publish-book.sh ~/Downloads/<bookId>_publish.zip public
+   bash deploy/set-access.sh --list                 # 查看内容库与权限
+   bash deploy/set-access.sh <bookId> alice,bob     # 调整某本书的可见用户
+   bash deploy/sync-codes.sh                        # 从 访问码管理.xlsx 同步可登录码
+   bash deploy/sync-books.sh                        # 把线上书目写回 xlsx 的"书籍资源"表
    ```
-4. 用户用自己的访问码登录后即可在书架看到并收听。
-
-权限管理（访问码就是"账号"，管理员通过微信分发）：
-```bash
-bash deploy/set-access.sh --list                 # 查看内容库与权限
-bash deploy/set-access.sh <bookId> alice,bob     # 调整某本书的可见用户
-bash deploy/set-access.sh <bookId> public        # 设为公开
-```
 
 注意：
 - `deploy-tumei.sh` 同步代码时自动排除服务器上的 `library/`，内容库不会被覆盖。
+- 浏览器里发布/改权限后，`访问码管理.xlsx` 不会自动更新——需要时执行
+  `bash deploy/sync-books.sh` 把最新书目拉回表格。
 - 静态托管方案：访问码只控制书架可见性，不是加密安全边界（适合私人学习服务）。
+- 管理员密码保存在 `deploy/admin-password.txt`（已 gitignore）与服务器
+  `/etc/audiobook-api-token`；换密码：改本地文件后重跑 `bash deploy/setup-api.sh`。
 - 演示书：访问码 `demo` 可看到《演示 · The Quiet Village》（macOS 语音合成的样例）。

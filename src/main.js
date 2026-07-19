@@ -28,6 +28,12 @@ import {
 } from './db.js';
 import { fetchCatalog, fetchRemoteBook, fetchRemoteAudio, visibleBooks, isKnownCode } from './remote-library.js';
 import { buildPublishZip, countAudioChapters } from './publish-export.js';
+import {
+  normalizeAccessInput, accessToInput,
+  getSavedToken, saveToken, clearToken,
+  uploadPublishZip, setBookAccess, setValidCodes,
+  deleteBook as apiDeleteBook,
+} from './library-api.js';
 
 // ── State ──
 
@@ -99,6 +105,29 @@ const shelfCodeLabel = $('shelf-code-label');
 const btnLogout = $('btn-logout');
 const btnCopyWechat = $('btn-copy-wechat');
 const btnExportPublish = $('btn-export-publish');
+const btnPublishSite = $('btn-publish-site');
+const publishModal = $('publish-modal');
+const publishModalInfo = $('publish-modal-info');
+const publishAccessInput = $('publish-access-input');
+const publishTokenInput = $('publish-token-input');
+const publishProgressRow = $('publish-progress-row');
+const publishProgressBar = $('publish-progress-bar');
+const publishProgressPercent = $('publish-progress-percent');
+const publishModalStatus = $('publish-modal-status');
+const btnPublishCancel = $('btn-publish-cancel');
+const btnPublishConfirm = $('btn-publish-confirm');
+const fieldModal = $('field-modal');
+const fieldModalTitle = $('field-modal-title');
+const fieldModalHint = $('field-modal-hint');
+const fieldModalInput = $('field-modal-input');
+const fieldModalTokenRow = $('field-modal-token-row');
+const fieldModalToken = $('field-modal-token');
+const fieldModalStatus = $('field-modal-status');
+const btnFieldCancel = $('btn-field-cancel');
+const btnFieldSave = $('btn-field-save');
+const shelfAdminTools = $('shelf-admin-tools');
+const validCodesLabel = $('valid-codes-label');
+const btnManageCodes = $('btn-manage-codes');
 
 // ── App mode: user (default) vs admin ──
 // Admin mode is for the operator who generates audio; users only listen.
@@ -1952,6 +1981,15 @@ async function renderShelf(prefetchedCatalog) {
       : visibleBooks(catalog, accessCode);
     shelfEmpty.hidden = books.length > 0;
 
+    shelfAdminTools.hidden = !adminMode;
+    if (adminMode) {
+      const codes = catalog.validCodes || [];
+      validCodesLabel.textContent = codes.length
+        ? `已登记访问码 (${codes.length}): ${codes.join(', ')}`
+        : '尚未登记任何访问码';
+      currentValidCodes = codes;
+    }
+
     for (const entry of books) {
       const li = document.createElement('li');
       li.className = 'library-item';
@@ -1987,6 +2025,37 @@ async function renderShelf(prefetchedCatalog) {
       btnOpen.className = 'small-btn library-listen';
       btnOpen.textContent = '▶ 打开';
       actions.appendChild(btnOpen);
+
+      if (adminMode) {
+        const btnAccess = document.createElement('button');
+        btnAccess.className = 'small-btn';
+        btnAccess.textContent = '✏️ 权限';
+        btnAccess.title = '修改哪些访问码能看到这本书';
+        btnAccess.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openAccessEditor(entry);
+        });
+        actions.appendChild(btnAccess);
+
+        const btnRemove = document.createElement('button');
+        btnRemove.className = 'small-btn library-delete';
+        btnRemove.textContent = '🗑';
+        btnRemove.title = '从网站下架这本书';
+        btnRemove.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (btnRemove.dataset.armed) {
+            removeRemoteBook(entry, btnRemove);
+          } else {
+            btnRemove.dataset.armed = '1';
+            btnRemove.textContent = '确认下架?';
+            setTimeout(() => {
+              delete btnRemove.dataset.armed;
+              btnRemove.textContent = '🗑';
+            }, 3000);
+          }
+        });
+        actions.appendChild(btnRemove);
+      }
 
       li.appendChild(info);
       li.appendChild(actions);
@@ -2069,7 +2138,178 @@ async function openRemoteBook(entry) {
   }
 }
 
-// ── Admin: export publish package ──
+// ── Admin: one-click publish + remote management ──
+
+let currentValidCodes = [];
+
+/** Ask for / remember the admin password; returns '' if the field is empty. */
+function readTokenField(input) {
+  const token = (input.value || '').trim();
+  if (token) saveToken(token);
+  return token;
+}
+
+function openPublishModal() {
+  if (!state.book) return;
+  const audioCount = Object.keys(state.audioBlobs).length;
+  if (audioCount === 0) {
+    showToast('还没有生成音频 — 先生成 MP3 再发布', 'error');
+    return;
+  }
+  publishModalInfo.textContent =
+    `《${state.book.title}》 · ${state.book.chapters.length} 章 · ${audioCount} 段音频`;
+  publishAccessInput.value = '';
+  publishTokenInput.value = getSavedToken();
+  publishProgressRow.hidden = true;
+  publishModalStatus.textContent = '';
+  btnPublishConfirm.disabled = false;
+  publishModal.hidden = false;
+  (getSavedToken() ? publishAccessInput : publishTokenInput).focus();
+}
+
+async function doPublishToSite() {
+  const token = readTokenField(publishTokenInput);
+  if (!token) {
+    publishModalStatus.textContent = '请输入管理员密码';
+    publishTokenInput.focus();
+    return;
+  }
+  const access = normalizeAccessInput(publishAccessInput.value);
+  btnPublishConfirm.disabled = true;
+  publishModalStatus.textContent = '正在打包…';
+  try {
+    const publishId = makeBookId(state.book.title);
+    const { blob, manifest } = await buildPublishZip(
+      state.book, publishId, state.audioBlobs, state.audioTimelines, state.audioModes
+    );
+    publishProgressRow.hidden = false;
+    publishModalStatus.textContent = `正在上传 (${(blob.size / 1024 / 1024).toFixed(1)} MB)…`;
+    const result = await uploadPublishZip(token, blob, access, (frac) => {
+      const pct = Math.round(frac * 100);
+      publishProgressBar.style.width = pct + '%';
+      publishProgressPercent.textContent = pct + '%';
+    });
+    publishModal.hidden = true;
+    const who = result.book.access === 'public' ? '所有登录用户' : `访问码 ${result.book.access.join(', ')}`;
+    showToast(
+      `✅ 已发布《${result.book.title}》(${countAudioChapters(manifest)} 段音频) — ${who}立即可见`,
+      'success', 8000
+    );
+    renderShelf();
+  } catch (err) {
+    if (err.badToken) {
+      clearToken();
+      publishTokenInput.value = '';
+      publishTokenInput.focus();
+    }
+    publishProgressRow.hidden = true;
+    publishModalStatus.textContent = '发布失败: ' + err.message;
+    btnPublishConfirm.disabled = false;
+  }
+}
+
+btnPublishSite.addEventListener('click', openPublishModal);
+btnPublishConfirm.addEventListener('click', doPublishToSite);
+btnPublishCancel.addEventListener('click', () => { publishModal.hidden = true; });
+publishAccessInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doPublishToSite(); });
+publishTokenInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doPublishToSite(); });
+
+/**
+ * Generic one-field admin editor. onSave(value, token) should call the API
+ * and throw on failure; a thrown badToken error re-prompts for the password.
+ */
+function openFieldModal({ title, hint, value, onSave }) {
+  fieldModalTitle.textContent = title;
+  fieldModalHint.textContent = hint;
+  fieldModalInput.value = value;
+  fieldModalStatus.textContent = '';
+  fieldModalTokenRow.hidden = !!getSavedToken();
+  fieldModalToken.value = '';
+  btnFieldSave.disabled = false;
+  fieldModal.hidden = false;
+  fieldModalInput.focus();
+
+  btnFieldSave.onclick = async () => {
+    const token = getSavedToken() || readTokenField(fieldModalToken);
+    if (!token) {
+      fieldModalStatus.textContent = '请输入管理员密码';
+      fieldModalTokenRow.hidden = false;
+      fieldModalToken.focus();
+      return;
+    }
+    btnFieldSave.disabled = true;
+    fieldModalStatus.textContent = '正在保存…';
+    try {
+      await onSave(fieldModalInput.value, token);
+      fieldModal.hidden = true;
+      renderShelf();
+    } catch (err) {
+      if (err.badToken) {
+        clearToken();
+        fieldModalTokenRow.hidden = false;
+        fieldModalToken.focus();
+      }
+      fieldModalStatus.textContent = '保存失败: ' + err.message;
+      btnFieldSave.disabled = false;
+    }
+  };
+}
+
+btnFieldCancel.addEventListener('click', () => { fieldModal.hidden = true; });
+
+function openAccessEditor(entry) {
+  openFieldModal({
+    title: `✏️ 《${entry.title}》的访问权限`,
+    hint: '逗号分隔的访问码；public 为所有登录用户可见',
+    value: accessToInput(entry.access),
+    onSave: async (value, token) => {
+      const access = normalizeAccessInput(value);
+      await setBookAccess(token, entry.id, access);
+      showToast(`已更新《${entry.title}》权限: ${access}`, 'success');
+    },
+  });
+}
+
+btnManageCodes.addEventListener('click', () => {
+  openFieldModal({
+    title: '🔑 登记的访问码',
+    hint: '逗号分隔。这些码可以登录（即使还没分配书）；删除的码将无法登录。',
+    value: currentValidCodes.join(', '),
+    onSave: async (value, token) => {
+      const codes = value.split(/[,，、\s]+/).map(c => c.trim()).filter(Boolean);
+      const result = await setValidCodes(token, codes);
+      showToast(`访问码已更新 (${result.validCodes.length} 个)`, 'success');
+    },
+  });
+});
+
+async function removeRemoteBook(entry, btn) {
+  const token = getSavedToken();
+  if (!token) {
+    openFieldModal({
+      title: `🗑 下架《${entry.title}》`,
+      hint: '输入管理员密码确认下架（书籍文件将从网站删除）',
+      value: entry.id,
+      onSave: async (_value, tok) => {
+        await apiDeleteBook(tok, entry.id);
+        showToast(`已下架《${entry.title}》`, 'success');
+      },
+    });
+    return;
+  }
+  btn.disabled = true;
+  try {
+    await apiDeleteBook(token, entry.id);
+    showToast(`已下架《${entry.title}》`, 'success');
+    renderShelf();
+  } catch (err) {
+    if (err.badToken) clearToken();
+    showToast('下架失败: ' + err.message, 'error');
+    btn.disabled = false;
+  }
+}
+
+// ── Admin: export publish package (fallback for the script workflow) ──
 
 btnExportPublish.addEventListener('click', async () => {
   if (!state.book) return;
