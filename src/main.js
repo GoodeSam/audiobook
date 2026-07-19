@@ -304,6 +304,8 @@ function showReaderScreen() {
   bookTitleEl.textContent = state.book.title;
   renderChapterList();
   showPlaceholder();
+  refreshPublishIndicator();
+  refreshPublishedMap().then(refreshPublishIndicator);
 }
 
 btnBack.addEventListener('click', () => {
@@ -1671,6 +1673,7 @@ async function renderLibrary() {
     const books = (await listBooks()).filter(b => !String(b.id).startsWith('remote:'));
     librarySection.hidden = books.length === 0;
     libraryList.innerHTML = '';
+    if (books.length > 0) await refreshPublishedMap();
 
     for (const book of books) {
       const li = document.createElement('li');
@@ -1689,9 +1692,16 @@ async function renderLibrary() {
       const title = document.createElement('div');
       title.className = 'library-book-title';
       title.textContent = book.title;
+      const pub = publishedEntryForTitle(book.title);
+      const badge = document.createElement('span');
+      badge.className = 'publish-badge ' + (pub ? 'is-published' : 'not-published');
+      badge.textContent = pub ? '✅ 已发布' : '未发布';
+      if (pub) badge.title = `网站版本更新于 ${formatPublishDate(pub.updatedAt)}`;
+      title.appendChild(badge);
       const meta = document.createElement('div');
       meta.className = 'library-meta';
-      meta.textContent = `${book.chapters.length} chapters · ${audioCount} audio`;
+      meta.textContent = `${book.chapters.length} chapters · ${audioCount} audio`
+        + (pub ? ` · 网站版 ${formatPublishDate(pub.updatedAt)}` : '');
       info.appendChild(title);
       info.appendChild(meta);
       if (last) {
@@ -2153,6 +2163,48 @@ let currentValidCodes = [];
 function showModal(el) { el.hidden = false; el.classList.add('visible'); }
 function hideModal(el) { el.hidden = true; el.classList.remove('visible'); }
 
+// ── Published-state indicators (admin) ──
+
+let publishedBooks = {}; // publishId -> catalog entry
+
+async function refreshPublishedMap() {
+  try {
+    const catalog = await fetchCatalog(import.meta.env.BASE_URL);
+    publishedBooks = {};
+    for (const b of catalog.books || []) publishedBooks[b.id] = b;
+  } catch { /* offline — keep last known state */ }
+  return publishedBooks;
+}
+
+function publishedEntryForTitle(title) {
+  return publishedBooks[makePublishId(title || '')] || null;
+}
+
+/** Published entry for the book open in the reader (remote books by their id). */
+function currentPublishedEntry() {
+  if (!state.book) return null;
+  if (state.remoteId) return publishedBooks[state.remoteId] || null;
+  return publishedEntryForTitle(state.book.title);
+}
+
+/** Reflect the current book's published state on the sidebar publish button. */
+function refreshPublishIndicator() {
+  if (!state.book) return;
+  const entry = currentPublishedEntry();
+  btnPublishSite.classList.toggle('is-published', !!entry);
+  btnPublishSite.textContent = entry ? '✅ 已发布 · 点此更新网站版本' : '🚀 发布到网站';
+  btnPublishSite.title = entry
+    ? `已于 ${formatPublishDate(entry.updatedAt)} 发布（${entry.audioCount} 段音频）— 再次发布会覆盖网站版本`
+    : '一键发布到 audiobook.tumei.online — 用户书架立即可见';
+}
+
+function formatPublishDate(ts) {
+  if (!ts) return '?';
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 /** Ask for / remember the admin password; returns '' if the field is empty. */
 function readTokenField(input) {
   const token = (input.value || '').trim();
@@ -2167,8 +2219,10 @@ function openPublishModal() {
     showToast('还没有生成音频 — 先生成 MP3 再发布', 'error');
     return;
   }
+  const existing = currentPublishedEntry();
   publishModalInfo.textContent =
-    `《${state.book.title}》 · ${state.book.chapters.length} 章 · ${audioCount} 段音频`;
+    `《${state.book.title}》 · ${state.book.chapters.length} 章 · ${audioCount} 段音频`
+    + (existing ? ` — 已于 ${formatPublishDate(existing.updatedAt)} 发布过，本次发布将覆盖网站版本` : '');
   publishAccessInput.value = '';
   publishTokenInput.value = getSavedToken();
   publishForm.hidden = false;
@@ -2237,7 +2291,10 @@ async function doPublishToSite() {
       `可见范围：${who}`,
       '用户刷新书架即可看到这本书。',
     ]);
+    publishedBooks[result.book.id] = result.book;
+    refreshPublishIndicator();
     renderShelf();
+    renderLibrary();
   } catch (err) {
     if (err.badToken) {
       clearToken();

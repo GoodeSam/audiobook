@@ -1610,3 +1610,33 @@ body.user-mode .chapter-cb {
 .shelf-admin-tools[hidden] {
   display: none;
 }
+
+/* Published-state badges in the admin library */
+.publish-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  vertical-align: 2px;
+  white-space: nowrap;
+}
+
+.publish-badge.is-published {
+  background: #e4f5ec;
+  color: #2e8b57;
+}
+
+.publish-badge.not-published {
+  background: var(--sidebar-bg, #eee);
+  color: var(--text-secondary, #888);
+}
+
+.publish-site-btn.is-published {
+  background: #3a7bd5;
+}
+
+.publish-site-btn.is-published:hover {
+  background: #2f65b0;
+}
