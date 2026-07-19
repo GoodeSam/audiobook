@@ -1,0 +1,67 @@
+/**
+ * Remote library — admin-published books served as static files.
+ *
+ * The server hosts a catalog plus per-book folders:
+ *   library/catalog.json                  → { books: [{id, title, chapterCount,
+ *                                             access, updatedAt}] }
+ *   library/<bookId>/book.json            → { id, title, chapters: [{title,
+ *                                             markdown, translatedMarkdown,
+ *                                             audioFile, audioMode, timeline}] }
+ *   library/<bookId>/NNN.mp3              → per-chapter audio
+ *
+ * `access` is either the string "public" or an array of access codes.
+ * Users log in with an access code assigned by the admin (WeChat tumei321123);
+ * the code only controls which books their shelf shows — this is a private
+ * learning service, not a security boundary.
+ */
+
+const LIBRARY_PATH = 'library';
+
+/**
+ * Which catalog books are visible for an access code.
+ * @param {{books?: Array}} catalog
+ * @param {string} code - Access code (case-insensitive). Empty → public only.
+ * @returns {Array} matching book entries, newest first.
+ */
+export function visibleBooks(catalog, code) {
+  if (!catalog || !Array.isArray(catalog.books)) return [];
+  const norm = (code || '').trim().toLowerCase();
+  return catalog.books
+    .filter(b => {
+      if (b.access === 'public') return true;
+      if (!norm) return false;
+      return Array.isArray(b.access) && b.access.some(c => String(c).toLowerCase() === norm);
+    })
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+/**
+ * Whether an access code unlocks at least one book (or the catalog has
+ * the code listed anywhere) — used to accept/reject a login attempt.
+ */
+export function isKnownCode(catalog, code) {
+  const norm = (code || '').trim().toLowerCase();
+  if (!norm) return false;
+  if (!catalog || !Array.isArray(catalog.books)) return false;
+  return catalog.books.some(b =>
+    Array.isArray(b.access) && b.access.some(c => String(c).toLowerCase() === norm)
+  );
+}
+
+export async function fetchCatalog(baseUrl = '') {
+  const res = await fetch(`${baseUrl}${LIBRARY_PATH}/catalog.json`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Catalog unavailable (${res.status})`);
+  return res.json();
+}
+
+export async function fetchRemoteBook(bookId, baseUrl = '') {
+  const res = await fetch(`${baseUrl}${LIBRARY_PATH}/${encodeURIComponent(bookId)}/book.json`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Book unavailable (${res.status})`);
+  return res.json();
+}
+
+export async function fetchRemoteAudio(bookId, audioFile, baseUrl = '') {
+  const res = await fetch(`${baseUrl}${LIBRARY_PATH}/${encodeURIComponent(bookId)}/${audioFile}`);
+  if (!res.ok) throw new Error(`Audio unavailable (${res.status})`);
+  return res.blob();
+}

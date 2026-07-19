@@ -35,3 +35,34 @@ bash deploy/deploy-tumei.sh
   `api.cognitive.microsofttranslator.com`（翻译）、`wss://speech.platform.bing.com`（Edge TTS）。
 - GitHub Pages 版本（https://GoodeSam.github.io/audiobook/）仍由 GitHub Actions 自动构建，
   与本部署互不影响（base 路径不同，构建时区分）。
+
+## 管理员内容库工作流（用户不能自己生成音频）
+
+应用有两种模式：
+- **用户模式**（默认）：输入访问码登录 → 书架只显示分配给该码的书 → 听音频/看文本。
+  无任何上传、翻译、生成功能；界面提示"联系管理员微信 tumei321123"。
+- **管理员模式**：打开 `https://audiobook.tumei.online/#admin`（或本地开发地址加 `#admin`，
+  会记住状态；`#user` 切回）。拥有完整生成功能。
+
+发布一本书的完整流程：
+1. 管理员模式里上传书籍 → 翻译 → 生成各章 MP3。
+2. 侧栏点 **Publish ZIP**，下载 `<bookId>_publish.zip`（含 book.json + 各章 MP3 + 时间线）。
+3. 本机执行：
+   ```bash
+   bash deploy/publish-book.sh ~/Downloads/<bookId>_publish.zip 访问码1,访问码2
+   # 或所有登录用户可见：
+   bash deploy/publish-book.sh ~/Downloads/<bookId>_publish.zip public
+   ```
+4. 用户用自己的访问码登录后即可在书架看到并收听。
+
+权限管理（访问码就是"账号"，管理员通过微信分发）：
+```bash
+bash deploy/set-access.sh --list                 # 查看内容库与权限
+bash deploy/set-access.sh <bookId> alice,bob     # 调整某本书的可见用户
+bash deploy/set-access.sh <bookId> public        # 设为公开
+```
+
+注意：
+- `deploy-tumei.sh` 同步代码时自动排除服务器上的 `library/`，内容库不会被覆盖。
+- 静态托管方案：访问码只控制书架可见性，不是加密安全边界（适合私人学习服务）。
+- 演示书：访问码 `demo` 可看到《演示 · The Quiet Village》（macOS 语音合成的样例）。

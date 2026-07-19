@@ -18,6 +18,8 @@ export function createAppState() {
     audioBlobs: {},
     audioTimelines: {},     // chapterIndex -> timeline array (see audio-timeline.js)
     audioModes: {},         // chapterIndex -> audio mode the MP3 was generated with
+    remoteId: null,         // remote-library book id when opened from the shelf
+    remoteAudioMeta: {},    // chapterIndex -> { file } for audio not yet downloaded
     activeChapter: null,
     activeTab: 'original',
     generating: false,
@@ -41,6 +43,8 @@ export function resetStateForNewBook(state, book) {
   state.audioBlobs = {};
   state.audioTimelines = {};
   state.audioModes = {};
+  state.remoteId = null;
+  state.remoteAudioMeta = {};
   state.activeChapter = null;
   state.activeTab = 'original';
   state.generating = false;

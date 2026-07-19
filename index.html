@@ -14,32 +14,60 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="stylesheet" href="/src/app.css">
 </head>
-<body>
+<body class="user-mode">
   <!-- Upload Screen -->
   <div id="upload-screen" class="screen active">
     <div class="upload-container">
       <h1>Book to Audiobook</h1>
-      <p class="subtitle">Upload a book (EPUB, PDF, DOCX) or use your microphone to create audio</p>
+      <p class="subtitle admin-only">Upload a book (EPUB, PDF, DOCX) or use your microphone to create audio</p>
+      <p class="subtitle user-only">你的英语听读书架 · Your bilingual listening shelf</p>
+
+      <!-- User mode: access-code login -->
+      <div id="login-card" class="login-card user-only" hidden>
+        <div class="login-icon">🔑</div>
+        <p class="login-hint">输入管理员提供的访问码<br><span class="login-hint-en">Enter the access code from your admin</span></p>
+        <div class="login-row">
+          <input type="text" id="access-code-input" placeholder="访问码 / Access code" maxlength="40" autocomplete="off" autocapitalize="off">
+          <button id="btn-login" class="file-btn login-btn">进入书架</button>
+        </div>
+        <p id="login-error" class="login-error" hidden></p>
+      </div>
+
+      <!-- User mode: shelf of admin-published books -->
+      <div id="shelf-section" class="shelf-section" hidden>
+        <div class="shelf-header">
+          <h2 class="library-title">📚 我的书架 <span id="shelf-code-label" class="shelf-code"></span></h2>
+          <button id="btn-logout" class="small-btn user-only">退出</button>
+        </div>
+        <ul id="shelf-list" class="library-list"></ul>
+        <p id="shelf-empty" class="shelf-empty" hidden>书架还是空的 — 联系管理员为你添加书籍</p>
+      </div>
+
+      <!-- Contact-admin banner -->
+      <div class="contact-banner user-only">
+        <span class="contact-text">📖 想把自己的书做成双语有声书？<br>联系管理员微信：<strong id="admin-wechat">tumei321123</strong></span>
+        <button id="btn-copy-wechat" class="small-btn">复制微信号</button>
+      </div>
 
       <!-- Listener profile bar -->
-      <div class="user-bar">
+      <div class="user-bar admin-only">
         <span class="user-bar-label">👤 Listener</span>
         <select id="user-select" aria-label="Current listener"></select>
         <button id="btn-add-user" class="small-btn" title="Add a new listener">+ New</button>
       </div>
-      <div id="user-add-row" class="user-add-row" hidden>
+      <div id="user-add-row" class="user-add-row admin-only" hidden>
         <input type="text" id="user-name-input" placeholder="Listener name" maxlength="30" aria-label="New listener name">
         <button id="btn-user-save" class="small-btn">Save</button>
         <button id="btn-user-cancel" class="small-btn">Cancel</button>
       </div>
 
-      <!-- Library of saved books -->
-      <div id="library-section" class="library-section" hidden>
+      <!-- Library of saved books (admin workspace) -->
+      <div id="library-section" class="library-section admin-only" hidden>
         <h2 class="library-title">My Library</h2>
         <ul id="library-list" class="library-list"></ul>
       </div>
 
-      <div id="drop-zone" class="drop-zone" role="button" tabindex="0" aria-label="Upload book file">
+      <div id="drop-zone" class="drop-zone admin-only" role="button" tabindex="0" aria-label="Upload book file">
         <div class="drop-icon">📖</div>
         <p>Drag & drop an EPUB, PDF, DOCX, or HTML file here</p>
         <p class="or">or</p>
@@ -48,7 +76,7 @@
           <input type="file" id="file-input" accept=".epub,.pdf,.docx,.html,.htm" hidden>
         </label>
       </div>
-      <div class="stt-section">
+      <div class="stt-section admin-only">
         <p class="or">or dictate with your voice</p>
         <div id="stt-controls" class="stt-controls">
           <select id="stt-lang-select" class="stt-lang-select" aria-label="Speech language">
@@ -89,7 +117,7 @@
       <button id="btn-back" class="tool-btn" title="Back to upload">← Back</button>
       <h2 id="book-title" class="book-title">Book Title</h2>
       <!-- Config summary card — shows current settings at a glance -->
-      <div id="config-summary" class="config-summary">
+      <div id="config-summary" class="config-summary admin-only">
         <span id="summary-mode" class="summary-tag">Bilingual</span>
         <span id="summary-lang" class="summary-tag">→ Chinese</span>
         <button id="btn-toggle-settings" class="tool-btn" title="Toggle settings">Settings ▾</button>
@@ -97,7 +125,7 @@
     </header>
 
     <!-- Settings Panel — collapsible, basic visible by default -->
-    <div id="settings-panel" class="settings-panel">
+    <div id="settings-panel" class="settings-panel admin-only">
       <div class="settings-basic">
         <div class="setting-group">
           <label class="setting-label" for="audio-mode-select">Audio Mode</label>
@@ -194,15 +222,16 @@
       <!-- Chapter List Sidebar -->
       <aside id="chapter-sidebar" class="sidebar">
         <div class="sidebar-header">
-          <h3>Chapters <button id="btn-select-all" class="small-btn" title="Select/deselect all (Ctrl+Shift+A)">Select All</button></h3>
+          <h3>Chapters <button id="btn-select-all" class="small-btn admin-only" title="Select/deselect all (Ctrl+Shift+A)">Select All</button></h3>
           <!-- Primary CTA -->
-          <button id="btn-translate-generate" class="primary-cta" title="Translate + Generate MP3 (Ctrl+Shift+G)">Generate Audio</button>
+          <button id="btn-translate-generate" class="primary-cta admin-only" title="Translate + Generate MP3 (Ctrl+Shift+G)">Generate Audio</button>
           <!-- Secondary actions -->
-          <div class="sidebar-actions-secondary">
+          <div class="sidebar-actions-secondary admin-only">
             <button id="btn-translate-selected" class="secondary-btn" title="Translate selected">Translate Only</button>
             <button id="btn-generate-selected" class="secondary-btn" title="Generate MP3 only">MP3 Only</button>
             <button id="btn-export-selected" class="secondary-btn" title="Export Markdown">Export MD</button>
             <button id="btn-download-all" class="secondary-btn" title="Download all as ZIP" disabled>Download ZIP</button>
+            <button id="btn-export-publish" class="secondary-btn" title="Export publish package for the remote library">Publish ZIP</button>
           </div>
         </div>
         <ul id="chapter-list" class="chapter-list" role="listbox" aria-label="Book chapters"></ul>
@@ -215,7 +244,7 @@
         </div>
         <div id="chapter-view" class="chapter-view" hidden>
           <!-- Status summary bar -->
-          <div id="chapter-status-bar" class="chapter-status-bar">
+          <div id="chapter-status-bar" class="chapter-status-bar admin-only">
             <span id="status-translation" class="status-badge">Not translated</span>
             <span id="status-audio" class="status-badge">No audio</span>
             <span id="status-checkpoint" class="status-badge" hidden></span>
@@ -224,10 +253,10 @@
             <h2 id="chapter-title"></h2>
             <div class="chapter-actions">
               <button id="btn-listen-chapter" class="action-btn listen-btn" disabled>▶ Listen</button>
-              <button id="btn-translate-chapter" class="action-btn">Translate</button>
-              <button id="btn-generate-chapter" class="action-btn">Generate MP3</button>
-              <button id="btn-download-chapter" class="action-btn" disabled>Download MP3</button>
-              <button id="btn-download-md" class="action-btn">Download MD</button>
+              <button id="btn-translate-chapter" class="action-btn admin-only">Translate</button>
+              <button id="btn-generate-chapter" class="action-btn admin-only">Generate MP3</button>
+              <button id="btn-download-chapter" class="action-btn admin-only" disabled>Download MP3</button>
+              <button id="btn-download-md" class="action-btn admin-only">Download MD</button>
             </div>
           </div>
           <div class="chapter-content-tabs" role="tablist" aria-label="Chapter view mode">

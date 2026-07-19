@@ -358,3 +358,23 @@ All 280 tests pass. Verified end-to-end in browser: upload → parse → transla
 4. **PWA**：manifest + Service Worker（离线壳缓存）+ PNG 图标，可"添加到主屏幕"。
 5. **部署**：腾讯云（43.139.242.52，与 read.tumei.online 同一台），nginx 站点 + `deploy/deploy-tumei.sh`（以 `DEPLOY_BASE=/` 构建）。GitHub Pages 部署不受影响。**剩余一步手动操作：在 DNSPod 给 `tumei.online` 添加 A 记录 `audiobook → 43.139.242.52`**；DNS 生效后 HTTPS 证书会自动签发（后台脚本监测中，也可手动执行 `deploy/README.md` 中的 certbot 命令）。
 全部 280 个测试通过。浏览器端到端验证：上传 → 解析 → 翻译 → 书库跨刷新持久化 → 播放器句子高亮渲染。
+
+\>> 用户登陆自己的账户后，不能自己生成音频，而是联系管理员（微信tumei321123）由管理员生成；生成后书籍出现在用户APP界面，可听音频看文本学习。管理员可建内容库，并指定某些人对某些书有访问权限，而不是所有人都能访问所有书。优化相关显示界面。
+
+**Final report (EN):** Restructured the app into an admin-publishes / users-listen model with per-book access control.
+
+1. **Two modes.** User mode (default): a clean login screen asking for an access code, a personal shelf of admin-published books, and a "contact admin on WeChat: tumei321123" banner with a copy button. All upload/translate/generate UI is hidden. Admin mode (open with `#admin`, persists; `#user` switches back): the full generation workspace, plus a new "Publish ZIP" button.
+2. **Content library with per-book permissions.** The server hosts `library/catalog.json` + one folder per book (book.json with chapters/translations/timelines + per-chapter MP3s). Each catalog entry has `access`: either specific access codes or `public`. A user's shelf shows only books assigned to their code — verified end-to-end (code "alice" sees her book, not "bob"'s).
+3. **Admin workflow.** Generate in the browser → click Publish ZIP → `bash deploy/publish-book.sh <zip> code1,code2` uploads and registers the book; `deploy/set-access.sh` lists the library and changes permissions without re-uploading. `deploy-tumei.sh` now excludes `library/` so code deploys never touch content.
+4. **User experience.** Tapping a book streams text immediately; chapter audio downloads on demand and is cached in IndexedDB for offline replay; listening progress is tracked per access code with "continue where you left off" on the shelf. The player (synced sentence highlighting, English-only text) is unchanged.
+5. **Verified live** on https://audiobook.tumei.online with a real published demo book (access code `demo`, macOS-synthesized speech): login, permission filtering, on-demand audio fetch, playback with sentence/paragraph highlighting, and progress resume all work. 291 unit tests pass.
+Note: this is a static-hosting design — access codes control shelf visibility, not cryptographic security; fine for a private WeChat-run learning service.
+
+**最终报告（中文）：** 应用已重构为"管理员生成、用户收听"模式，并支持按书授权。
+
+1. **双模式。** 用户模式（默认）：访问码登录页 + 个人书架 + "联系管理员微信 tumei321123"横幅（带复制按钮），所有上传/翻译/生成功能全部隐藏。管理员模式（网址加 `#admin` 开启并记住，`#user` 切回）：保留完整生成工作台，新增 "Publish ZIP" 发布按钮。
+2. **内容库与按书授权。** 服务器托管 `library/catalog.json` + 每本书一个目录（book.json 含章节/译文/时间线 + 各章 MP3）。每本书的 `access` 字段指定可见的访问码列表（或 `public` 公开）。用户书架只显示分配给自己访问码的书——已实测（alice 看不到 bob 的书）。
+3. **管理员流程。** 浏览器里生成 → 点 Publish ZIP → 本机执行 `bash deploy/publish-book.sh <zip> 访问码1,访问码2` 上传并登记；`deploy/set-access.sh` 可查看内容库、随时调整权限（无需重传）。`deploy-tumei.sh` 已排除 `library/`，代码部署不会碰内容库。
+4. **用户体验。** 打开书立即看到文本；章节音频按需下载并缓存到 IndexedDB（可离线重听）；收听进度按访问码记录，书架显示"上次听到"一键续听。播放器（句子同步高亮、只显示英文）不变。
+5. **线上实测通过**：在 https://audiobook.tumei.online 用真实发布的演示书（访问码 `demo`，macOS 语音合成）完整走通登录、权限过滤、按需加载音频、句子/段落高亮播放、进度续听。291 个单元测试全部通过。
+说明：静态托管方案下，访问码控制的是书架可见性，并非加密安全边界——适合微信私域学习服务的场景。

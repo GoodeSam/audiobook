@@ -26,6 +26,9 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;
+  // Remote library content (catalog, book.json, MP3s) is fetched fresh by the
+  // app and cached in IndexedDB — don't double-cache it here.
+  if (url.pathname.includes('/library/')) return;
 
   if (req.mode === 'navigate') {
     event.respondWith(

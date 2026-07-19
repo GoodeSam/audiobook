@@ -25,6 +25,8 @@ import {
   saveChapterAudio, getBookAudio,
   saveProgress, getProgress, getLastPlayed,
 } from './db.js';
+import { fetchCatalog, fetchRemoteBook, fetchRemoteAudio, visibleBooks, isKnownCode } from './remote-library.js';
+import { buildPublishZip, countAudioChapters } from './publish-export.js';
 
 // ── State ──
 
@@ -85,6 +87,38 @@ const btnUserCancel = $('btn-user-cancel');
 const librarySection = $('library-section');
 const libraryList = $('library-list');
 const playerScreen = $('player-screen');
+const loginCard = $('login-card');
+const accessCodeInput = $('access-code-input');
+const btnLogin = $('btn-login');
+const loginError = $('login-error');
+const shelfSection = $('shelf-section');
+const shelfList = $('shelf-list');
+const shelfEmpty = $('shelf-empty');
+const shelfCodeLabel = $('shelf-code-label');
+const btnLogout = $('btn-logout');
+const btnCopyWechat = $('btn-copy-wechat');
+const btnExportPublish = $('btn-export-publish');
+
+// ── App mode: user (default) vs admin ──
+// Admin mode is for the operator who generates audio; users only listen.
+// Toggle by visiting the app with #admin (persists) or #user to switch back.
+
+const ADMIN_KEY = 'audiobook.adminMode';
+let adminMode = localStorage.getItem(ADMIN_KEY) === '1';
+
+function applyModeFromHash() {
+  if (location.hash === '#admin') adminMode = true;
+  else if (location.hash === '#user') adminMode = false;
+  localStorage.setItem(ADMIN_KEY, adminMode ? '1' : '0');
+  document.body.classList.toggle('admin-mode', adminMode);
+  document.body.classList.toggle('user-mode', !adminMode);
+}
+applyModeFromHash();
+window.addEventListener('hashchange', () => {
+  const wasAdmin = adminMode;
+  applyModeFromHash();
+  if (wasAdmin !== adminMode) initHome();
+});
 
 // ── Upload handling ──
 
@@ -244,7 +278,7 @@ btnBack.addEventListener('click', () => {
   readerScreen.classList.remove('active');
   uploadScreen.classList.add('active');
   resetDropZone();
-  renderLibrary();
+  initHome();
 });
 
 // ── Settings toggle & config summary ──
@@ -509,10 +543,18 @@ function updateChapterRow(idx) {
 
 /** Build status label HTML for a chapter row. */
 function buildStatusLabel(ch, idx) {
+  const hasAudio = !!state.audioBlobs[idx] || !!state.remoteAudioMeta[idx];
+
+  // User mode: only listenability matters
+  if (!adminMode) {
+    return hasAudio
+      ? '<span class="row-status row-status-done" role="img" aria-label="Audio available">▶ 可听</span>'
+      : '<span class="row-status row-status-pending" role="img" aria-label="Text only">文本</span>';
+  }
+
   const hasTrCp = !!state.translationCheckpoints[idx];
   const hasAuCp = !!state.audioCheckpoints[idx];
   const hasTr = !!ch.translatedMarkdown;
-  const hasAudio = !!state.audioBlobs[idx];
 
   if (hasTrCp) return '<span class="row-status row-status-partial" role="img" aria-label="Translation in progress">Translating...</span>';
   if (hasAuCp) return '<span class="row-status row-status-partial" role="img" aria-label="Audio in progress">Generating...</span>';
@@ -619,8 +661,8 @@ function updateChapterButtons(idx) {
     btnGenerateChapter.classList.remove('done', 'resume');
   }
 
-  // Listen + download buttons
-  btnListenChapter.disabled = !hasAudio;
+  // Listen + download buttons (remote audio can be fetched on demand)
+  btnListenChapter.disabled = !hasAudio && !state.remoteAudioMeta[idx];
   btnDownloadChapter.disabled = !hasAudio;
 }
 
@@ -1293,6 +1335,7 @@ function renderMarkdownHtml(md) {
 // ── Keyboard shortcuts ──
 
 document.addEventListener('keydown', (e) => {
+  if (!adminMode) return; // generation shortcuts are admin-only
   // Ctrl+Shift+G (or Cmd+Shift+G on Mac): Translate & Generate selected
   if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'G') {
     e.preventDefault();
@@ -1582,7 +1625,9 @@ userNameInput.addEventListener('keydown', (e) => {
 
 async function renderLibrary() {
   try {
-    const books = await listBooks();
+    // The admin workspace lists locally created books only — shelf caches
+    // (remote:*) belong to the user-mode shelf.
+    const books = (await listBooks()).filter(b => !String(b.id).startsWith('remote:'));
     librarySection.hidden = books.length === 0;
     libraryList.innerHTML = '';
 
@@ -1712,18 +1757,40 @@ const player = new Player({
   },
 });
 
-/** Find the nearest chapter with audio in the given direction. */
+/** Find the nearest chapter with (local or remote) audio in the given direction. */
 function findAudioChapter(from, dir) {
   if (from === null || !state.book) return null;
   for (let i = from + dir; i >= 0 && i < state.book.chapters.length; i += dir) {
-    if (state.audioBlobs[i]) return i;
+    if (state.audioBlobs[i] || state.remoteAudioMeta[i]) return i;
   }
   return null;
 }
 
+/** Make sure a chapter's audio blob is in memory, downloading it if remote. */
+async function ensureChapterAudio(idx) {
+  if (state.audioBlobs[idx]) return true;
+  const meta = state.remoteAudioMeta[idx];
+  if (!meta || !state.remoteId) return false;
+  showToast('正在加载音频… Loading audio…', 'info', 3000);
+  const blob = await fetchRemoteAudio(state.remoteId, meta.file, import.meta.env.BASE_URL);
+  state.audioBlobs[idx] = blob;
+  persistAudio(idx); // cache for offline replay
+  if (state.activeChapter === idx) updateChapterButtons(idx);
+  updateChapterRow(idx);
+  return true;
+}
+
 async function openPlayer(idx) {
+  if (!state.audioBlobs[idx]) {
+    try {
+      const ok = await ensureChapterAudio(idx);
+      if (!ok) return;
+    } catch (err) {
+      showToast('音频加载失败，请检查网络后重试 (' + err.message + ')', 'error');
+      return;
+    }
+  }
   const blob = state.audioBlobs[idx];
-  if (!blob) return;
   const ch = state.book.chapters[idx];
 
   // Resume from this user's saved position when meaningful
@@ -1807,9 +1874,233 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+// ── User mode: access-code login + shelf of admin-published books ──
+
+const ACCESS_KEY = 'audiobook.accessCode';
+let accessCode = localStorage.getItem(ACCESS_KEY) || '';
+
+function showLoginError(msg) {
+  loginError.textContent = msg;
+  loginError.hidden = !msg;
+}
+
+async function doLogin() {
+  const code = accessCodeInput.value.trim();
+  if (!code) return;
+  btnLogin.disabled = true;
+  showLoginError('');
+  try {
+    const catalog = await fetchCatalog(import.meta.env.BASE_URL);
+    if (!isKnownCode(catalog, code)) {
+      showLoginError('访问码无效 — 请联系管理员微信 tumei321123');
+      return;
+    }
+    accessCode = code;
+    localStorage.setItem(ACCESS_KEY, code);
+    currentUserId = `code:${code.toLowerCase()}`;
+    renderUserHome();
+    renderShelf(catalog);
+  } catch (err) {
+    showLoginError('无法连接书架服务，请稍后再试 (' + err.message + ')');
+  } finally {
+    btnLogin.disabled = false;
+  }
+}
+
+btnLogin.addEventListener('click', doLogin);
+accessCodeInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') doLogin();
+});
+
+btnLogout.addEventListener('click', () => {
+  accessCode = '';
+  localStorage.removeItem(ACCESS_KEY);
+  renderUserHome();
+});
+
+btnCopyWechat.addEventListener('click', () => {
+  navigator.clipboard.writeText('tumei321123').then(() => {
+    btnCopyWechat.textContent = '已复制 ✓';
+    setTimeout(() => { btnCopyWechat.textContent = '复制微信号'; }, 2000);
+  });
+});
+
+/** Show login card or shelf depending on login state (user mode home). */
+function renderUserHome() {
+  const loggedIn = !!accessCode;
+  loginCard.hidden = adminMode || loggedIn;
+  shelfSection.hidden = !adminMode && !loggedIn;
+  shelfCodeLabel.textContent = adminMode ? '(admin — all books)' : (accessCode ? `· ${accessCode}` : '');
+}
+
+/** Render the shelf: admin sees every published book, users see their own. */
+async function renderShelf(prefetchedCatalog) {
+  if (shelfSection.hidden) return;
+  shelfList.innerHTML = '';
+  shelfEmpty.hidden = true;
+  try {
+    const catalog = prefetchedCatalog || await fetchCatalog(import.meta.env.BASE_URL);
+    const books = adminMode
+      ? (catalog.books || []).slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+      : visibleBooks(catalog, accessCode);
+    shelfEmpty.hidden = books.length > 0;
+
+    for (const entry of books) {
+      const li = document.createElement('li');
+      li.className = 'library-item';
+
+      const info = document.createElement('div');
+      info.className = 'library-info';
+      const title = document.createElement('div');
+      title.className = 'library-book-title';
+      title.textContent = entry.title;
+      const meta = document.createElement('div');
+      meta.className = 'library-meta';
+      const parts = [`${entry.chapterCount || '?'} 章`, `${entry.audioCount || 0} 段音频`];
+      if (adminMode) parts.push(entry.access === 'public' ? '公开' : `访问码: ${(entry.access || []).join(', ')}`);
+      meta.textContent = parts.join(' · ');
+      info.appendChild(title);
+      info.appendChild(meta);
+
+      if (currentUserId) {
+        try {
+          const last = await getLastPlayed(currentUserId, `remote:${entry.id}`);
+          if (last) {
+            const cont = document.createElement('div');
+            cont.className = 'library-continue';
+            cont.textContent = `上次听到: ${last.chapterTitle} · ${formatTime(last.time)}`;
+            info.appendChild(cont);
+          }
+        } catch { /* ignore */ }
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'library-actions';
+      const btnOpen = document.createElement('button');
+      btnOpen.className = 'small-btn library-listen';
+      btnOpen.textContent = '▶ 打开';
+      actions.appendChild(btnOpen);
+
+      li.appendChild(info);
+      li.appendChild(actions);
+      li.addEventListener('click', () => openRemoteBook(entry));
+      shelfList.appendChild(li);
+    }
+  } catch (err) {
+    shelfEmpty.textContent = '无法加载书架，请检查网络后刷新 (' + err.message + ')';
+    shelfEmpty.hidden = false;
+  }
+}
+
+/** Open an admin-published book: text immediately, audio on demand. */
+async function openRemoteBook(entry) {
+  const storageId = `remote:${entry.id}`;
+  try {
+    let data;
+    try {
+      data = await fetchRemoteBook(entry.id, import.meta.env.BASE_URL);
+      // Cache for offline reopening
+      saveBook({
+        id: storageId,
+        title: data.title,
+        chapters: data.chapters.map(ch => ({
+          title: ch.title, markdown: ch.markdown, translatedMarkdown: ch.translatedMarkdown,
+        })),
+        remoteMeta: data.chapters.map(ch => ({
+          audioFile: ch.audioFile, audioMode: ch.audioMode, timeline: ch.timeline,
+        })),
+      }).catch(() => {});
+    } catch (err) {
+      // Offline fallback: use the cached copy if we have one
+      const cached = await getBook(storageId);
+      if (!cached) throw err;
+      data = {
+        title: cached.title,
+        chapters: cached.chapters.map((ch, i) => ({
+          ...ch,
+          audioFile: cached.remoteMeta?.[i]?.audioFile || null,
+          audioMode: cached.remoteMeta?.[i]?.audioMode || null,
+          timeline: cached.remoteMeta?.[i]?.timeline || null,
+        })),
+      };
+    }
+
+    const book = {
+      title: data.title,
+      chapters: data.chapters.map(ch => ({
+        title: ch.title,
+        markdown: ch.markdown,
+        translatedMarkdown: ch.translatedMarkdown || null,
+      })),
+    };
+    resetStateForNewBook(state, book);
+    state.bookId = storageId;
+    state.remoteId = entry.id;
+    data.chapters.forEach((ch, i) => {
+      if (ch.audioFile) {
+        state.remoteAudioMeta[i] = { file: ch.audioFile };
+        if (ch.timeline) state.audioTimelines[i] = ch.timeline;
+        if (ch.audioMode) state.audioModes[i] = ch.audioMode;
+      }
+    });
+    _renderCache.clear();
+    _previewCache.clear();
+    await restoreBookAudio(storageId); // previously downloaded chapters
+    showReaderScreen();
+
+    // Jump straight back to where this user left off
+    if (currentUserId) {
+      try {
+        const last = await getLastPlayed(currentUserId, storageId);
+        if (last && (state.audioBlobs[last.chapterIndex] || state.remoteAudioMeta[last.chapterIndex])) {
+          selectChapter(last.chapterIndex);
+        }
+      } catch { /* ignore */ }
+    }
+  } catch (err) {
+    showToast('无法打开书籍: ' + err.message, 'error');
+  }
+}
+
+// ── Admin: export publish package ──
+
+btnExportPublish.addEventListener('click', async () => {
+  if (!state.book) return;
+  const audioCount = Object.keys(state.audioBlobs).length;
+  if (audioCount === 0) {
+    showToast('No audio generated yet — generate MP3s before publishing', 'error');
+    return;
+  }
+  try {
+    const publishId = makeBookId(state.book.title);
+    const { blob, filename, manifest } = await buildPublishZip(
+      state.book, publishId, state.audioBlobs, state.audioTimelines, state.audioModes
+    );
+    downloadBlob(blob, filename);
+    showToast(
+      `Publish package ready (${countAudioChapters(manifest)} audio chapters). ` +
+      `Run: bash deploy/publish-book.sh ~/Downloads/${filename} <access-codes>`,
+      'success', 10000
+    );
+  } catch (err) {
+    showToast('Publish export failed: ' + err.message, 'error');
+  }
+});
+
 // ── App startup ──
 
-initUsers().then(renderLibrary);
+function initHome() {
+  renderUserHome();
+  if (adminMode) {
+    initUsers().then(renderLibrary);
+    renderShelf();
+  } else {
+    if (accessCode) currentUserId = `code:${accessCode.toLowerCase()}`;
+    renderShelf();
+  }
+}
+
+initHome();
 
 // Debug/E2E hook — lets tests inject audio and drive the player
 window.__audiobook = { state, openPlayer, renderLibrary, persistAudio };
