@@ -2,10 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#4a6fa5">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Audiobook">
   <title>Book to Audiobook</title>
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <link rel="apple-touch-icon" href="/icon-192.svg">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="stylesheet" href="/src/app.css">
 </head>
 <body>
@@ -14,6 +20,25 @@
     <div class="upload-container">
       <h1>Book to Audiobook</h1>
       <p class="subtitle">Upload a book (EPUB, PDF, DOCX) or use your microphone to create audio</p>
+
+      <!-- Listener profile bar -->
+      <div class="user-bar">
+        <span class="user-bar-label">👤 Listener</span>
+        <select id="user-select" aria-label="Current listener"></select>
+        <button id="btn-add-user" class="small-btn" title="Add a new listener">+ New</button>
+      </div>
+      <div id="user-add-row" class="user-add-row" hidden>
+        <input type="text" id="user-name-input" placeholder="Listener name" maxlength="30" aria-label="New listener name">
+        <button id="btn-user-save" class="small-btn">Save</button>
+        <button id="btn-user-cancel" class="small-btn">Cancel</button>
+      </div>
+
+      <!-- Library of saved books -->
+      <div id="library-section" class="library-section" hidden>
+        <h2 class="library-title">My Library</h2>
+        <ul id="library-list" class="library-list"></ul>
+      </div>
+
       <div id="drop-zone" class="drop-zone" role="button" tabindex="0" aria-label="Upload book file">
         <div class="drop-icon">📖</div>
         <p>Drag & drop an EPUB, PDF, DOCX, or HTML file here</p>
@@ -198,6 +223,7 @@
           <div class="chapter-header">
             <h2 id="chapter-title"></h2>
             <div class="chapter-actions">
+              <button id="btn-listen-chapter" class="action-btn listen-btn" disabled>▶ Listen</button>
               <button id="btn-translate-chapter" class="action-btn">Translate</button>
               <button id="btn-generate-chapter" class="action-btn">Generate MP3</button>
               <button id="btn-download-chapter" class="action-btn" disabled>Download MP3</button>
@@ -227,6 +253,45 @@
         </div>
         <p id="progress-text" aria-live="polite"></p>
         <button id="btn-cancel" class="action-btn cancel-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Player Screen — mobile-first listening view with synced text -->
+  <div id="player-screen" class="screen">
+    <header class="player-header">
+      <button id="btn-player-close" class="player-icon-btn" title="Back" aria-label="Close player">←</button>
+      <div class="player-titles">
+        <div id="player-book-title" class="player-book-title"></div>
+        <div id="player-chapter-title" class="player-chapter-title"></div>
+      </div>
+      <button id="btn-player-chapters" class="player-icon-btn" title="Chapters" aria-label="Chapter list">☰</button>
+    </header>
+
+    <div id="player-text" class="player-text" aria-live="off"></div>
+
+    <div class="player-controls">
+      <div class="player-seek-row">
+        <span id="player-time-cur" class="player-time">0:00</span>
+        <input type="range" id="player-seek" class="player-seek" min="0" max="0" value="0" step="0.1" aria-label="Seek">
+        <span id="player-time-total" class="player-time">0:00</span>
+      </div>
+      <div class="player-buttons">
+        <button id="btn-player-rate" class="player-side-btn" title="Playback speed">1×</button>
+        <button id="btn-player-prev" class="player-icon-btn" title="Previous chapter" aria-label="Previous chapter">⏮</button>
+        <button id="btn-player-back15" class="player-icon-btn" title="Back 15 seconds" aria-label="Back 15 seconds">↺15</button>
+        <button id="btn-player-play" class="player-play-btn" aria-label="Play">▶</button>
+        <button id="btn-player-fwd15" class="player-icon-btn" title="Forward 15 seconds" aria-label="Forward 15 seconds">↻15</button>
+        <button id="btn-player-next" class="player-icon-btn" title="Next chapter" aria-label="Next chapter">⏭</button>
+        <span class="player-side-spacer"></span>
+      </div>
+    </div>
+
+    <!-- Chapter drawer -->
+    <div id="player-drawer" class="player-drawer" hidden>
+      <div class="player-drawer-panel">
+        <h3>Chapters</h3>
+        <ul id="player-chapter-list" class="player-chapter-list"></ul>
       </div>
     </div>
   </div>

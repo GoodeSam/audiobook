@@ -14,7 +14,10 @@
 export function createAppState() {
   return {
     book: null,
+    bookId: null,           // stable id for library persistence (derived from title)
     audioBlobs: {},
+    audioTimelines: {},     // chapterIndex -> timeline array (see audio-timeline.js)
+    audioModes: {},         // chapterIndex -> audio mode the MP3 was generated with
     activeChapter: null,
     activeTab: 'original',
     generating: false,
@@ -34,7 +37,10 @@ export function createAppState() {
  */
 export function resetStateForNewBook(state, book) {
   state.book = book || null;
+  state.bookId = null;
   state.audioBlobs = {};
+  state.audioTimelines = {};
+  state.audioModes = {};
   state.activeChapter = null;
   state.activeTab = 'original';
   state.generating = false;

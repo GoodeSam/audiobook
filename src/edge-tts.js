@@ -13,6 +13,9 @@
 
 import { detectLanguage, splitByLanguage } from './language-utils.js';
 import { convertNumbersToChinese } from './number-to-chinese.js';
+import { buildTimeline, splitIntoSentences } from './audio-timeline.js';
+
+export { splitIntoSentences };
 
 const EDGE_TTS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
 const EDGE_TTS_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
@@ -199,12 +202,12 @@ export function splitIntoParagraphs(text) {
  * If the paragraph contains mixed Chinese/English, it will be split into
  * separate segments. Pure single-language paragraphs remain as one segment.
  */
-function splitParaIntoSegments(text, segments) {
+function splitParaIntoSegments(text, segments, paraIndex) {
   const langSegments = splitByLanguage(text);
   for (const seg of langSegments) {
     const trimmed = seg.text.trim();
     if (trimmed) {
-      segments.push({ text: trimmed, lang: seg.lang });
+      segments.push({ text: trimmed, lang: seg.lang, paraIndex });
     }
   }
 }
@@ -226,21 +229,21 @@ export function buildChapterSegments({ originalText, translatedText, audioMode }
   const segments = [];
 
   if (audioMode === 'translated') {
-    for (const para of transParas) {
-      const clean = stripMarkdown(para);
+    for (let i = 0; i < transParas.length; i++) {
+      const clean = stripMarkdown(transParas[i]);
       if (!clean.trim()) continue;
-      splitParaIntoSegments(clean, segments);
+      splitParaIntoSegments(clean, segments, i);
     }
   } else if (audioMode === 'bilingual') {
     const maxLen = Math.max(origParas.length, transParas.length);
     for (let i = 0; i < maxLen; i++) {
       if (i < origParas.length) {
         const cleanOrig = stripMarkdown(origParas[i]);
-        if (cleanOrig.trim()) splitParaIntoSegments(cleanOrig, segments);
+        if (cleanOrig.trim()) splitParaIntoSegments(cleanOrig, segments, i);
       }
       if (i < transParas.length) {
         const cleanTrans = stripMarkdown(transParas[i]);
-        if (cleanTrans.trim()) splitParaIntoSegments(cleanTrans, segments);
+        if (cleanTrans.trim()) splitParaIntoSegments(cleanTrans, segments, i);
       }
     }
   } else if (audioMode === 'en-zh-en') {
@@ -249,16 +252,16 @@ export function buildChapterSegments({ originalText, translatedText, audioMode }
     for (let i = 0; i < maxLen; i++) {
       const cleanOrig = i < origParas.length ? stripMarkdown(origParas[i]) : '';
       const cleanTrans = i < transParas.length ? stripMarkdown(transParas[i]) : '';
-      if (cleanOrig.trim()) splitParaIntoSegments(cleanOrig, segments);
-      if (cleanTrans.trim()) splitParaIntoSegments(cleanTrans, segments);
-      if (cleanOrig.trim()) splitParaIntoSegments(cleanOrig, segments);
+      if (cleanOrig.trim()) splitParaIntoSegments(cleanOrig, segments, i);
+      if (cleanTrans.trim()) splitParaIntoSegments(cleanTrans, segments, i);
+      if (cleanOrig.trim()) splitParaIntoSegments(cleanOrig, segments, i);
     }
   } else {
     // 'original' mode (default)
-    for (const para of origParas) {
-      const clean = stripMarkdown(para);
+    for (let i = 0; i < origParas.length; i++) {
+      const clean = stripMarkdown(origParas[i]);
       if (!clean.trim()) continue;
-      splitParaIntoSegments(clean, segments);
+      splitParaIntoSegments(clean, segments, i);
     }
   }
 
@@ -295,7 +298,8 @@ export function buildChapterSegments({ originalText, translatedText, audioMode }
  * @param {number} [options.startIndex=0] - Segment index to resume from.
  * @param {Blob[]} [options.existingBlobs=[]] - Already-synthesized blobs.
  * @param {Function} [options.onCheckpoint] - Called with checkpoint data after each segment.
- * @returns {Promise<Blob>} Concatenated MP3 blob.
+ * @returns {Promise<{blob: Blob, timeline: Array|null}>} Concatenated MP3 blob
+ *   plus a playback timeline mapping audio time to text (see audio-timeline.js).
  */
 export async function generateChapterAudio(options = {}) {
   _cancelled = false;
@@ -354,20 +358,12 @@ export async function generateChapterAudio(options = {}) {
   }
 
   const finalBlob = new Blob(audioBlobs, { type: 'audio/mpeg' });
+  // Timeline maps playback time to text for synced highlighting in the player.
+  // Falls back to null if a stale checkpoint left blobs misaligned with segments.
+  const timeline = buildTimeline(segments, audioBlobs.map(b => b.size));
   // Release segment blobs to free memory — the final blob owns the data now
   audioBlobs.length = 0;
-  return finalBlob;
-}
-
-/**
- * Split text into sentences for paragraph-level synthesis.
- */
-export function splitIntoSentences(text) {
-  if (!text.trim()) return [];
-  return text
-    .split(/(?<=[.!?])\s+(?=[A-Z""])|(?<=[.!?])$/)
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
+  return { blob: finalBlob, timeline };
 }
 
 /**

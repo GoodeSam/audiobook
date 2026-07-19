@@ -17,6 +17,14 @@ import { ProgressTracker } from './progress-tracker.js';
 import { buildBilingualMarkdown } from './bilingual-view.js';
 import { createAppState, resetStateForNewBook, resetStateOnError } from './app-state.js';
 import { countTranslatableParagraphs } from './paragraph-utils.js';
+import { Player } from './player.js';
+import { formatTime } from './audio-timeline.js';
+import {
+  listUsers, createUser,
+  saveBook, getBook, listBooks, deleteBook,
+  saveChapterAudio, getBookAudio,
+  saveProgress, getProgress, getLastPlayed,
+} from './db.js';
 
 // ── State ──
 
@@ -67,6 +75,16 @@ const statusTranslation = $('status-translation');
 const statusAudio = $('status-audio');
 const statusCheckpoint = $('status-checkpoint');
 const toastContainer = $('toast-container');
+const btnListenChapter = $('btn-listen-chapter');
+const userSelect = $('user-select');
+const btnAddUser = $('btn-add-user');
+const userAddRow = $('user-add-row');
+const userNameInput = $('user-name-input');
+const btnUserSave = $('btn-user-save');
+const btnUserCancel = $('btn-user-cancel');
+const librarySection = $('library-section');
+const libraryList = $('library-list');
+const playerScreen = $('player-screen');
 
 // ── Upload handling ──
 
@@ -176,10 +194,26 @@ async function handleFile(file) {
       }
     }
 
+    // Merge previously saved translations for the same book (re-upload case)
+    const bookId = makeBookId(book.title);
+    try {
+      const stored = await getBook(bookId);
+      if (stored && stored.chapters?.length === book.chapters.length) {
+        stored.chapters.forEach((sc, i) => {
+          if (sc.translatedMarkdown) book.chapters[i].translatedMarkdown = sc.translatedMarkdown;
+        });
+      }
+    } catch { /* persistence unavailable — continue in-memory */ }
+
     // Reset all state flags (including generating and working)
     resetStateForNewBook(state, book);
+    state.bookId = bookId;
     _renderCache.clear();
     _previewCache.clear();
+
+    // Restore previously generated audio for this book
+    await restoreBookAudio(bookId);
+    persistBook();
 
     // Restore drop zone before switching screens so it's ready if user comes back
     resetDropZone();
@@ -210,6 +244,7 @@ btnBack.addEventListener('click', () => {
   readerScreen.classList.remove('active');
   uploadScreen.classList.add('active');
   resetDropZone();
+  renderLibrary();
 });
 
 // ── Settings toggle & config summary ──
@@ -584,7 +619,8 @@ function updateChapterButtons(idx) {
     btnGenerateChapter.classList.remove('done', 'resume');
   }
 
-  // Download buttons
+  // Listen + download buttons
+  btnListenChapter.disabled = !hasAudio;
   btnDownloadChapter.disabled = !hasAudio;
 }
 
@@ -701,6 +737,7 @@ async function translateSingleChapter(idx) {
     });
     ch.translatedMarkdown = translated;
     delete state.translationCheckpoints[idx];
+    persistBook();
     invalidateRenderCache(idx); // Translation changed — clear cached renders
     renderChapterList();
     updateTabs();
@@ -763,6 +800,7 @@ async function translateMultipleChapters(indices) {
       completedParas += countTranslatableParagraphs(ch.markdown);
       ch.translatedMarkdown = translated;
       delete state.translationCheckpoints[idx];
+      persistBook();
       invalidateRenderCache(idx);
       updateChapterRow(idx);
     }
@@ -853,7 +891,7 @@ async function generateSingleChapter(idx) {
 
   try {
     tracker.startPhase('generating', 1);
-    const blob = await generateChapterAudio({
+    const { blob, timeline } = await generateChapterAudio({
       originalText: ch.markdown,
       translatedText: ch.translatedMarkdown,
       audioMode: mode,
@@ -871,7 +909,10 @@ async function generateSingleChapter(idx) {
     });
 
     state.audioBlobs[idx] = blob;
+    state.audioTimelines[idx] = timeline;
+    state.audioModes[idx] = mode;
     delete state.audioCheckpoints[idx]; // Clear checkpoint on success
+    persistAudio(idx);
     renderChapterList();
     selectChapter(idx);
   } catch (err) {
@@ -938,6 +979,7 @@ async function generateMultipleChapters(indices) {
           });
           ch.translatedMarkdown = translated;
           delete state.translationCheckpoints[idx];
+          persistBook();
           invalidateRenderCache(idx);
         } catch (err) {
           if (err.message.includes('cancelled')) throw err;
@@ -964,7 +1006,7 @@ async function generateMultipleChapters(indices) {
         progressTitle.textContent = `Generating ${i + 1}/${readyToGenerate.length}: ${ch.title}${acp ? ' (resuming)' : ''}`;
 
         try {
-          const blob = await generateChapterAudio({
+          const { blob, timeline } = await generateChapterAudio({
             originalText: ch.markdown,
             translatedText: ch.translatedMarkdown,
             audioMode: mode,
@@ -980,7 +1022,10 @@ async function generateMultipleChapters(indices) {
             onCheckpoint: (cpData) => { state.audioCheckpoints[idx] = cpData; },
           });
           state.audioBlobs[idx] = blob;
+          state.audioTimelines[idx] = timeline;
+          state.audioModes[idx] = mode;
           delete state.audioCheckpoints[idx];
+          persistAudio(idx);
         } catch (err) {
           if (err.message.includes('cancelled')) throw err;
           failures.push({ chapter: ch.title, phase: 'generate', error: err.message });
@@ -1372,10 +1417,406 @@ if (btnSttUse) {
     };
 
     resetStateForNewBook(state, book);
+    state.bookId = `dictation-${Date.now()}`;
     _renderCache.clear();
     _previewCache.clear();
+    persistBook();
     sttTranscript.value = '';
     sttPreview.hidden = true;
     showReaderScreen();
   });
+}
+
+// ── Library persistence ──
+
+function makeBookId(title) {
+  const slug = sanitizeFilename(title || '').toLowerCase().replace(/\s+/g, '-');
+  return slug || 'untitled';
+}
+
+/** Persist the current book (chapters + translations) — fire-and-forget. */
+function persistBook() {
+  if (!state.bookId || !state.book) return;
+  saveBook({
+    id: state.bookId,
+    title: state.book.title,
+    chapters: state.book.chapters.map(ch => ({
+      title: ch.title,
+      markdown: ch.markdown,
+      translatedMarkdown: ch.translatedMarkdown || null,
+    })),
+  }).catch(err => console.warn('Failed to save book to library:', err));
+}
+
+/** Persist one chapter's generated audio — fire-and-forget. */
+function persistAudio(idx) {
+  if (!state.bookId) return;
+  saveChapterAudio(state.bookId, idx, {
+    blob: state.audioBlobs[idx],
+    timeline: state.audioTimelines[idx] || null,
+    audioMode: state.audioModes[idx] || null,
+  }).catch(err => console.warn('Failed to save audio to library:', err));
+}
+
+/** Load previously generated audio for a book into state. */
+async function restoreBookAudio(bookId) {
+  try {
+    const records = await getBookAudio(bookId);
+    for (const rec of records) {
+      state.audioBlobs[rec.chapterIndex] = rec.blob;
+      if (rec.timeline) state.audioTimelines[rec.chapterIndex] = rec.timeline;
+      if (rec.audioMode) state.audioModes[rec.chapterIndex] = rec.audioMode;
+    }
+    if (records.length > 0) updateBulkButtons();
+  } catch { /* persistence unavailable */ }
+}
+
+async function openBookFromLibrary(bookId, { autoListen = false } = {}) {
+  try {
+    const stored = await getBook(bookId);
+    if (!stored) {
+      showToast('Book not found in library', 'error');
+      renderLibrary();
+      return;
+    }
+    const book = {
+      title: stored.title,
+      chapters: stored.chapters.map(ch => ({ ...ch })),
+    };
+    resetStateForNewBook(state, book);
+    state.bookId = bookId;
+    _renderCache.clear();
+    _previewCache.clear();
+    await restoreBookAudio(bookId);
+    showReaderScreen();
+
+    if (autoListen) {
+      let idx = null;
+      try {
+        const last = currentUserId ? await getLastPlayed(currentUserId, bookId) : null;
+        if (last && state.audioBlobs[last.chapterIndex]) idx = last.chapterIndex;
+      } catch { /* ignore */ }
+      if (idx === null) {
+        idx = Object.keys(state.audioBlobs).map(Number).sort((a, b) => a - b)[0];
+        if (idx === undefined) idx = null;
+      }
+      if (idx !== null) {
+        selectChapter(idx);
+        openPlayer(idx);
+      }
+    }
+  } catch (err) {
+    showToast('Failed to open book: ' + err.message, 'error');
+  }
+}
+
+// ── Listener profiles (multi-user) ──
+
+const CURRENT_USER_KEY = 'audiobook.currentUser';
+let currentUserId = localStorage.getItem(CURRENT_USER_KEY) || null;
+
+async function initUsers() {
+  try {
+    let users = await listUsers();
+    if (users.length === 0) {
+      users = [await createUser('Default')];
+    }
+    if (!currentUserId || !users.some(u => u.id === currentUserId)) {
+      currentUserId = users[0].id;
+    }
+    localStorage.setItem(CURRENT_USER_KEY, currentUserId);
+    renderUserSelect(users);
+  } catch (err) {
+    console.warn('User profiles unavailable:', err);
+  }
+}
+
+function renderUserSelect(users) {
+  userSelect.innerHTML = '';
+  for (const u of users) {
+    const opt = document.createElement('option');
+    opt.value = u.id;
+    opt.textContent = u.name;
+    userSelect.appendChild(opt);
+  }
+  userSelect.value = currentUserId;
+}
+
+userSelect.addEventListener('change', () => {
+  currentUserId = userSelect.value;
+  localStorage.setItem(CURRENT_USER_KEY, currentUserId);
+  renderLibrary();
+});
+
+btnAddUser.addEventListener('click', () => {
+  userAddRow.hidden = false;
+  userNameInput.value = '';
+  userNameInput.focus();
+});
+
+btnUserCancel.addEventListener('click', () => {
+  userAddRow.hidden = true;
+});
+
+async function saveNewUser() {
+  const name = userNameInput.value.trim();
+  if (!name) return;
+  try {
+    const user = await createUser(name);
+    currentUserId = user.id;
+    localStorage.setItem(CURRENT_USER_KEY, currentUserId);
+    userAddRow.hidden = true;
+    renderUserSelect(await listUsers());
+    renderLibrary();
+  } catch (err) {
+    showToast('Failed to create listener: ' + err.message, 'error');
+  }
+}
+
+btnUserSave.addEventListener('click', saveNewUser);
+userNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') saveNewUser();
+});
+
+// ── Library UI ──
+
+async function renderLibrary() {
+  try {
+    const books = await listBooks();
+    librarySection.hidden = books.length === 0;
+    libraryList.innerHTML = '';
+
+    for (const book of books) {
+      const li = document.createElement('li');
+      li.className = 'library-item';
+
+      let audioCount = 0;
+      try { audioCount = (await getBookAudio(book.id)).length; } catch { /* ignore */ }
+
+      let last = null;
+      if (currentUserId) {
+        try { last = await getLastPlayed(currentUserId, book.id); } catch { /* ignore */ }
+      }
+
+      const info = document.createElement('div');
+      info.className = 'library-info';
+      const title = document.createElement('div');
+      title.className = 'library-book-title';
+      title.textContent = book.title;
+      const meta = document.createElement('div');
+      meta.className = 'library-meta';
+      meta.textContent = `${book.chapters.length} chapters · ${audioCount} audio`;
+      info.appendChild(title);
+      info.appendChild(meta);
+      if (last) {
+        const cont = document.createElement('div');
+        cont.className = 'library-continue';
+        cont.textContent = `Last: ${last.chapterTitle} · ${formatTime(last.time)}`;
+        info.appendChild(cont);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'library-actions';
+
+      if (audioCount > 0) {
+        const btnListen = document.createElement('button');
+        btnListen.className = 'small-btn library-listen';
+        btnListen.textContent = last ? '▶ Continue' : '▶ Listen';
+        btnListen.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openBookFromLibrary(book.id, { autoListen: true });
+        });
+        actions.appendChild(btnListen);
+      }
+
+      const btnOpen = document.createElement('button');
+      btnOpen.className = 'small-btn';
+      btnOpen.textContent = 'Open';
+      btnOpen.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openBookFromLibrary(book.id);
+      });
+      actions.appendChild(btnOpen);
+
+      const btnDelete = document.createElement('button');
+      btnDelete.className = 'small-btn library-delete';
+      btnDelete.textContent = 'Delete';
+      btnDelete.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (btnDelete.dataset.armed !== '1') {
+          btnDelete.dataset.armed = '1';
+          btnDelete.textContent = 'Sure?';
+          setTimeout(() => {
+            btnDelete.dataset.armed = '';
+            btnDelete.textContent = 'Delete';
+          }, 3000);
+          return;
+        }
+        try {
+          await deleteBook(book.id);
+          renderLibrary();
+        } catch (err) {
+          showToast('Failed to delete: ' + err.message, 'error');
+        }
+      });
+      actions.appendChild(btnDelete);
+
+      li.appendChild(info);
+      li.appendChild(actions);
+      li.addEventListener('click', () => openBookFromLibrary(book.id, { autoListen: audioCount > 0 }));
+      libraryList.appendChild(li);
+    }
+  } catch (err) {
+    console.warn('Library unavailable:', err);
+  }
+}
+
+// ── Player integration ──
+
+const player = new Player({
+  elements: {
+    btnPlay: $('btn-player-play'),
+    btnBack15: $('btn-player-back15'),
+    btnFwd15: $('btn-player-fwd15'),
+    btnPrev: $('btn-player-prev'),
+    btnNext: $('btn-player-next'),
+    btnRate: $('btn-player-rate'),
+    btnClose: $('btn-player-close'),
+    seek: $('player-seek'),
+    timeCur: $('player-time-cur'),
+    timeTotal: $('player-time-total'),
+    text: $('player-text'),
+    bookTitle: $('player-book-title'),
+    chapterTitle: $('player-chapter-title'),
+  },
+  onSaveProgress: ({ chapterIndex, time, duration }) => {
+    if (!state.bookId || !currentUserId || !state.book) return;
+    const ch = state.book.chapters[chapterIndex];
+    saveProgress({
+      userId: currentUserId,
+      bookId: state.bookId,
+      chapterIndex,
+      time,
+      duration,
+      chapterTitle: ch ? ch.title : '',
+      bookTitle: state.book.title,
+    }).catch(() => { /* persistence unavailable */ });
+  },
+  onRequestChapter: (dir) => {
+    const next = findAudioChapter(player.chapterIndex, dir);
+    if (next !== null) openPlayer(next);
+  },
+  onClose: () => {
+    playerScreen.classList.remove('active');
+    if (state.activeChapter !== null) updateChapterButtons(state.activeChapter);
+  },
+});
+
+/** Find the nearest chapter with audio in the given direction. */
+function findAudioChapter(from, dir) {
+  if (from === null || !state.book) return null;
+  for (let i = from + dir; i >= 0 && i < state.book.chapters.length; i += dir) {
+    if (state.audioBlobs[i]) return i;
+  }
+  return null;
+}
+
+async function openPlayer(idx) {
+  const blob = state.audioBlobs[idx];
+  if (!blob) return;
+  const ch = state.book.chapters[idx];
+
+  // Resume from this user's saved position when meaningful
+  let resumeTime = 0;
+  if (currentUserId && state.bookId) {
+    try {
+      const rec = await getProgress(currentUserId, state.bookId, idx);
+      if (rec && rec.duration > 0 && rec.time > 3 && rec.time < rec.duration - 5) {
+        resumeTime = rec.time;
+      }
+    } catch { /* ignore */ }
+  }
+
+  playerScreen.classList.add('active');
+  player.openChapter({
+    bookTitle: state.book.title,
+    chapterTitle: ch.title,
+    chapterIndex: idx,
+    originalText: ch.markdown,
+    blob,
+    timeline: state.audioTimelines[idx] || null,
+    resumeTime,
+  });
+  state.activeChapter = idx;
+  renderPlayerChapterList();
+}
+
+btnListenChapter.addEventListener('click', () => {
+  if (state.activeChapter === null) return;
+  openPlayer(state.activeChapter);
+});
+
+// Chapter drawer inside the player
+const playerDrawer = $('player-drawer');
+const playerChapterList = $('player-chapter-list');
+const btnPlayerChapters = $('btn-player-chapters');
+
+btnPlayerChapters.addEventListener('click', () => {
+  playerDrawer.hidden = !playerDrawer.hidden;
+  if (!playerDrawer.hidden) renderPlayerChapterList();
+});
+
+playerDrawer.addEventListener('click', (e) => {
+  if (e.target === playerDrawer) playerDrawer.hidden = true;
+});
+
+function renderPlayerChapterList() {
+  playerChapterList.innerHTML = '';
+  if (!state.book) return;
+  state.book.chapters.forEach((ch, idx) => {
+    const li = document.createElement('li');
+    li.className = 'player-chapter-item';
+    const hasAudio = !!state.audioBlobs[idx];
+    li.classList.toggle('current', idx === player.chapterIndex);
+    li.classList.toggle('no-audio', !hasAudio);
+
+    const name = document.createElement('span');
+    name.className = 'player-chapter-name';
+    name.textContent = ch.title;
+    li.appendChild(name);
+
+    const badge = document.createElement('span');
+    badge.className = 'player-chapter-badge';
+    badge.textContent = hasAudio ? '▶' : '—';
+    li.appendChild(badge);
+
+    if (hasAudio) {
+      li.addEventListener('click', () => {
+        playerDrawer.hidden = true;
+        openPlayer(idx);
+      });
+    }
+    playerChapterList.appendChild(li);
+  });
+}
+
+// Save progress when the app is backgrounded or closed mid-playback
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && player.isOpen) {
+    player._saveProgress(true);
+  }
+});
+
+// ── App startup ──
+
+initUsers().then(renderLibrary);
+
+// Debug/E2E hook — lets tests inject audio and drive the player
+window.__audiobook = { state, openPlayer, renderLibrary, persistAudio };
+
+// Register the service worker for offline/PWA support (production builds only)
+if ('serviceWorker' in navigator && !import.meta.env.DEV) {
+  navigator.serviceWorker
+    .register(`${import.meta.env.BASE_URL}sw.js`)
+    .catch(err => console.warn('Service worker registration failed:', err));
 }

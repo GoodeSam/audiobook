@@ -1,7 +1,5 @@
 Append (do not overwrite) the final report(English first and then  Chinese) to the end of the currently open Markdown file（/Users/victor/projects/audiobook/[audiobookProcess.md](http://audiobookProcess.md)）.
 
-
-
 \>> 借鉴 /Users/victor/projects/EasyOriginals 和 /Users/victor/projects/tepub的内容，制作一个gitpage，当我上传一个epub书籍时，他可以把这个书籍extract成多个markdown文件，并对每一个markdown组成文件利用Edge TTS转换成mp3。 Build a gitpage that extracts uploaded EPUB books into multiple markdown files and converts each markdown file to mp3 using Edge TTS. Reference /Users/victor/projects/EasyOriginals and /Users/victor/projects/tepub for implementation patterns.
 
 ```javascript
@@ -333,4 +331,30 @@ voice instead of English voice.
 
 Fix the issue where exported markdown files contain embedded base64 image data URIs (e.g., `data:image/png;base64,iVBORw0KGgo...`) instead of properly exporting images as separate files or valid image references.
 
-\>> 在audiobook的预览区域，可以成功地看到图片，但是download md以后，图片在typoria中打开后显示为“![images]\(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABWcAAAJ6CAAAAAEWrZ+dAAAACXBIWXMAAC4jAAAuIwF4pT92AAADGGlDQ1BQaG90b3Nob3AgSUNDIHByb2ZpbGUAAHjaY2BgnuDo4uTKJMDAUFBUUuQe5BgZERmlwH6egY2BmYGBgYGBITG5uMAxIMCHgYGBIS8/L5UBFTAyMHy7...”
+\>> 在audiobook的预览区域，可以成功地看到图片，但是download md以后，图片在typoria中打开后显示为“![images](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABWcAAAJ6CAAAAAEWrZ+dAAAACXBIWXMAAC4jAAAuIwF4pT92AAADGGlDQ1BQaG90b3Nob3AgSUNDIHByb2ZpbGUAAHjaY2BgnuDo4uTKJMDAUFBUUuQe5BgZERmlwH6egY2BmYGBgYGBITG5uMAxIMCHgYGBIS8/L5UBFTAyMHy7...”
+
+对/Users/victor/projects/audiobook/进行优化，使其在最后的download Zip 后不仅可以下载现有内容，还可以把已有的多个mp3文件合成一个整体的mp3文件
+
+使Audiobook可以打开html文件并转化为语音
+
+使audiobook最终的音频输出结果在目前的基础上增加一种组合模式：同一段文字先播放英语音频，然后播放汉语翻译音频，然后再播放英语音频。
+
+\>> 对这个audiobook进行全面升级，使其可以是一个在手机上使用的APP。上传书籍后按当前选择生成翻译和音频；在手机APP里听音频时屏幕显示对应英语文本，正在发音的句子高亮，中文音频不显示中文文本；文本与音频进度匹配；可选择小节、暂停等；支持多用户并记录收听内容和进度。并借鉴 reading 项目部署到腾讯云 audiobook.tumei.online。
+
+**Final report (EN):** Upgraded the audiobook web app into a mobile-first PWA with a synced listening player and multi-user progress tracking, deployed to Tencent Cloud.
+
+1. **Audio–text sync**: Edge TTS outputs CBR MP3 (48kbps), so each segment's duration is derived from its byte size. `generateChapterAudio` now returns `{blob, timeline}` where the timeline maps playback time → paragraph + language, with English segments subdivided into per-sentence spans (proportional to character count). New module `src/audio-timeline.js` (+27 unit tests).
+2. **Player** (`src/player.js` + `#player-screen`): full-screen mobile view showing English text only; the sentence being spoken is highlighted (Chinese audio highlights the corresponding English paragraph with a distinct style, no Chinese text shown). Auto-scroll follows playback; controls: play/pause, ±15s, prev/next chapter, seek bar, playback rate (0.75–1.5×), chapter drawer; Media Session lock-screen controls.
+3. **Multi-user + library** (`src/db.js`, IndexedDB): listener profiles (create/switch on home screen), books (chapters + translations), per-chapter MP3s + timelines, and per-user per-chapter listening progress (saved every 5s and on pause/close; resume on reopen). Home screen shows "My Library" with per-user "Continue" entries. All data is stored locally on the device.
+4. **PWA**: manifest + service worker (offline app shell) + PNG icons; installable to phone home screen.
+5. **Deployment**: Tencent Cloud (43.139.242.52, same server as read.tumei.online), nginx site + `deploy/deploy-tumei.sh` (builds with `DEPLOY_BASE=/`). GitHub Pages deployment unchanged (base `/audiobook/`). Remaining manual step: add DNSPod A record `audiobook → 43.139.242.52`; certbot HTTPS issuance runs automatically once DNS resolves (or run the command in `deploy/README.md`).
+All 280 tests pass. Verified end-to-end in browser: upload → parse → translate → library persistence across reloads → player rendering with sentence highlighting.
+
+**最终报告（中文）：** 已将 audiobook 升级为移动端优先的 PWA，带同步收听播放器和多用户进度记录，并部署到腾讯云。
+
+1. **音文同步**：Edge TTS 输出恒定码率 MP3（48kbps），每段音频时长可由字节数推算。`generateChapterAudio` 现在返回 `{blob, timeline}`，时间线把播放时间映射到段落+语言；英文段按句子字符数比例细分到句。新模块 `src/audio-timeline.js`（含 27 个单元测试）。
+2. **播放器**（`src/player.js`）：全屏移动端界面，只显示英语文本；正在朗读的句子高亮（播放中文音频时以另一种样式高亮对应英文段落，不显示中文）。自动滚动跟随进度；控制项：播放/暂停、±15秒、上/下一章、进度条、倍速（0.75–1.5×）、章节抽屉；支持锁屏媒体控制。
+3. **多用户+书库**（`src/db.js`，IndexedDB）：首页可新建/切换听者档案；书库保存书籍（含译文）、每章 MP3+时间线、每个用户每章的收听进度（每 5 秒及暂停/关闭时保存，重开自动续听）。首页"My Library"显示每个用户的"继续收听"。数据保存在本设备。
+4. **PWA**：manifest + Service Worker（离线壳缓存）+ PNG 图标，可"添加到主屏幕"。
+5. **部署**：腾讯云（43.139.242.52，与 read.tumei.online 同一台），nginx 站点 + `deploy/deploy-tumei.sh`（以 `DEPLOY_BASE=/` 构建）。GitHub Pages 部署不受影响。**剩余一步手动操作：在 DNSPod 给 `tumei.online` 添加 A 记录 `audiobook → 43.139.242.52`**；DNS 生效后 HTTPS 证书会自动签发（后台脚本监测中，也可手动执行 `deploy/README.md` 中的 certbot 命令）。
+全部 280 个测试通过。浏览器端到端验证：上传 → 解析 → 翻译 → 书库跨刷新持久化 → 播放器句子高亮渲染。
