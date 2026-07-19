@@ -402,3 +402,23 @@ Note: this is a static-hosting design — access codes control shelf visibility,
 3. **浏览器内管理。** 管理员书架顶部显示已登记的访问码并提供 🔑 管理入口（增删可登录的码）；每本书有 ✏️（修改哪些码可见）和 🗑（两次点击确认后从网站下架）。所有修改对用户即时生效。
 4. **任何入口都能用：** API 已开启 CORS，本地开发或 GitHub Pages 上的 #admin 也直接发布到正式内容库。
 5. **线上端到端实测通过**：无/错误密码返回 401；发布 → 静态访问 → 改权限 → 下架全链路正常；访问码接口对现有 100 个码原样读写无损；演示书与表格数据未受影响。314 个单元测试全部通过（新增 9 个）。注意：浏览器发布不会自动更新 访问码管理.xlsx——需要时执行 `bash deploy/sync-books.sh` 把最新书目拉回表格。
+
+\>> 我在翻译一本书的过程中出现了报错 Translation error: Microsoft Translate error: 429。 Fix translation failures caused by Microsoft Translate rate limiting (HTTP 429).
+
+**Final report (EN):** Translation now survives Microsoft's rate limiting instead of dying on it.
+
+1. **Why it happened:** the app fires translation batches back-to-back; the free Edge Translate endpoint rate-limits bursts with HTTP 429, and the old code only retried twice (1s/3s) — far shorter than a real rate-limit window — then gave up.
+2. **Longer, smarter retries:** on 429 the app now retries up to 5 times waiting 5s → 15s → 30s → 60s → 90s, and when Microsoft sends a `Retry-After` header its value is honored (capped at 120s). Transient 401/5xx errors keep their own short backoff.
+3. **Prevention:** batches are now spaced 350ms apart, which stays under the burst threshold in normal use.
+4. **Visible waiting:** during a rate-limit wait the progress dialog shows "⏳ 翻译服务限流 (429)，N 秒后自动重试 — 进度不会丢失", and Cancel aborts instantly even mid-wait.
+5. **If it still fails** after all retries, the error message now explains that progress is checkpointed — clicking Translate again resumes from the last completed paragraph (checkpointing already existed; nothing is retranslated or lost).
+316 unit tests pass (2 new: 429-retry-then-succeed, Retry-After honored). Deployed to audiobook.tumei.online and pushed to GitHub.
+
+**最终报告（中文）：** 翻译遇到微软限流不再直接报错中断，会自动等待并重试。
+
+1. **原因：** 应用连续不间断地发送翻译批次，免费的 Edge 翻译接口对突发请求返回 429 限流；旧代码只重试 2 次（等 1 秒/3 秒），远短于实际限流窗口，然后就放弃报错。
+2. **更长更聪明的重试：** 遇到 429 现在最多重试 5 次，依次等待 5→15→30→60→90 秒；若微软返回 `Retry-After` 头则按它指定的时间等（上限 120 秒）。临时性的 401/5xx 错误保持原有的短间隔重试。
+3. **预防触发：** 批次之间新增 350 毫秒间隔，正常使用下不易再触发限流。
+4. **等待可见：** 限流等待期间进度框显示"⏳ 翻译服务限流 (429)，N 秒后自动重试 — 进度不会丢失"，等待中点 Cancel 可立即中止。
+5. **万一重试仍失败**，错误提示会说明进度已保存——再点一次 Translate 会从上次完成的段落继续（断点续译机制原本就有，不会重翻或丢失）。
+316 个单元测试全部通过（新增 2 个：429 重试后成功、遵循 Retry-After）。已部署 audiobook.tumei.online 并推送 GitHub。
