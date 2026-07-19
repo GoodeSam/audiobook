@@ -452,3 +452,17 @@ Note: this is a static-hosting design — access codes control shelf visibility,
 2. **修复：** 新增 `showModal()/hideModal()` 辅助函数，同时切换属性和 `visible` class（发布弹窗和权限/访问码编辑弹窗都已接入）。同一 CSS 陷阱还导致弹窗里本应隐藏的访问码栏仍然可见——已为 `.modal-label`、`.shelf-admin-tools` 补上 `[hidden]` 覆盖规则。
 3. **已在真实浏览器里对线上站点验证：** 点 🚀 发布到网站 弹窗正常出现（只显示书籍信息 + 管理员密码栏，因为当前权限全开放），取消可正常关闭，截图确认。顺带清理了服务器内容库里遗留的空 `_test` 目录。
 316 个测试通过。已部署 audiobook.tumei.online 并推送 GitHub。
+
+\>> 发布失败：bad book id in manifest: 'self-talk-6-16-(organized)-copy-2'。 Fix publish rejection for titles containing special characters.
+
+**Final report (EN):** Publishing no longer fails on titles with parentheses or other special characters.
+
+1. **Root cause:** the publish id was derived from the book title keeping characters like `(`/`)`; the server (correctly) rejects anything outside lowercase letters, digits, `-`, `_`.
+2. **Fix:** new `makePublishId()` in src/library-api.js — lowercases, collapses every run of other characters into `-`, trims, caps at 60 chars ("Self-Talk 6-16 (Organized) copy 2" → `self-talk-6-16-organized-copy-2`). Titles with no latin letters at all (e.g. pure Chinese) get a stable `book-<hash>` id, so republishing the same book still overwrites rather than duplicates. Used by both 🚀 publish-to-site and the Publish ZIP fallback; local library ids are untouched.
+4 new unit tests (320 total, all pass). Deployed to audiobook.tumei.online and pushed to GitHub. The 发布失败 dialog did its job — the exact server reason was visible, which is what pinpointed this bug.
+
+**最终报告（中文）：** 书名含括号等特殊字符不再导致发布失败。
+
+1. **原因：** 发布用的书籍 ID 直接从书名生成，保留了 `(`、`)` 等字符；服务器出于安全只接受小写字母、数字、`-`、`_`，于是拒绝。
+2. **修复：** src/library-api.js 新增 `makePublishId()`——转小写、把其余字符段压成 `-`、去首尾、限 60 字符（"Self-Talk 6-16 (Organized) copy 2" → `self-talk-6-16-organized-copy-2`）。完全没有拉丁字母的书名（如纯中文）用稳定的 `book-<哈希>` ID，重复发布同一本书仍是覆盖而非新建。🚀 发布到网站和 Publish ZIP 备用通道都已换用；本机书库 ID 不受影响。
+新增 4 个单元测试（共 320 个，全部通过）。已部署 audiobook.tumei.online 并推送 GitHub。这次"发布失败"弹窗准确显示了服务器返回的原因——反馈机制正是靠它定位到了这个 bug。
