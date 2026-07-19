@@ -130,3 +130,8 @@ Ran 2 shell commands
 
 我作为管理员，可以将很多书生成音频做成内容库，然后管理员可以指定某些人对某些具体的书籍具有访问使用权限，而不是所有人对所有书籍都有使用权限
 
+当我在 [https://audiobook.tumei.online/#admin 生成了新的音频内容以后，新的可分配的资源应该出现在 访问码管理.xlsx  里面，以便于我来分配](https://audiobook.tumei.online/#admin)
+
+---
+
+对于目前的我在 在 #admin 生成音频，用户在

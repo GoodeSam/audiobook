@@ -378,3 +378,9 @@ Note: this is a static-hosting design — access codes control shelf visibility,
 4. **用户体验。** 打开书立即看到文本；章节音频按需下载并缓存到 IndexedDB（可离线重听）；收听进度按访问码记录，书架显示"上次听到"一键续听。播放器（句子同步高亮、只显示英文）不变。
 5. **线上实测通过**：在 https://audiobook.tumei.online 用真实发布的演示书（访问码 `demo`，macOS 语音合成）完整走通登录、权限过滤、按需加载音频、句子/段落高亮播放、进度续听。291 个单元测试全部通过。
 说明：静态托管方案下，访问码控制的是书架可见性，并非加密安全边界——适合微信私域学习服务的场景。
+
+\>> 使本软件也能对doc格式进行转化。 Add support for legacy .doc (binary Word) files.
+
+**Final report (EN):** Added browser-side parsing of legacy binary Word (.doc) files — no server or library needed. New `src/doc-parser.js` implements an OLE2 Compound File (CFB) reader (FAT/miniFAT/DIFAT chains, directory, mini-stream) plus MS-DOC text extraction: reads the FIB, locates the piece table (CLX/PlcPcd) in the 0Table/1Table stream, and decodes each piece as Windows-1252 or UTF-16LE; falls back to contiguous fcMin text for Word 6/95 files. Field codes (e.g. HYPERLINK instructions) are stripped keeping their visible result; table cell marks and control characters are normalized. Chapters are detected heuristically ("Chapter N", 第N章, Prologue/前言, etc.), with a single-chapter fallback. Wired into upload UI (drop zone, file picker, drag-drop) alongside EPUB/PDF/DOCX/HTML. 13 new tests use real .doc fixtures generated with macOS textutil (English + mixed Chinese/English); 305 tests pass. Verified in the browser: uploading sample-en.doc parses into 2 chapters with correct text. Deployed to audiobook.tumei.online.
+
+**最终报告（中文）：** 已支持老版二进制 Word（.doc）格式，纯浏览器解析，无需服务器或第三方库。新模块 `src/doc-parser.js` 实现了 OLE2 复合文件（CFB）读取（FAT/miniFAT/DIFAT 链、目录、mini-stream）和 MS-DOC 文本提取：解析 FIB、在 0Table/1Table 流中定位 piece table（CLX/PlcPcd），按块解码 Windows-1252 或 UTF-16LE；对 Word 6/95 老文件回退到 fcMin 连续文本。域代码（如超链接指令）会被剥除并保留可见文本；表格符和控制字符做规范化。章节按启发式识别（"Chapter N"、第N章、前言等），无标题时归为单章。已接入上传界面（拖放、文件选择器）与 EPUB/PDF/DOCX/HTML 并列。新增 13 个测试，使用 macOS textutil 生成的真实 .doc 样例（英文 + 中英混排）；305 个测试全部通过。浏览器实测：上传 sample-en.doc 正确解析为 2 章。已部署到 audiobook.tumei.online。
