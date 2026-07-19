@@ -422,3 +422,17 @@ Note: this is a static-hosting design — access codes control shelf visibility,
 4. **等待可见：** 限流等待期间进度框显示"⏳ 翻译服务限流 (429)，N 秒后自动重试 — 进度不会丢失"，等待中点 Cancel 可立即中止。
 5. **万一重试仍失败**，错误提示会说明进度已保存——再点一次 Translate 会从上次完成的段落继续（断点续译机制原本就有，不会重翻或丢失）。
 316 个单元测试全部通过（新增 2 个：429 重试后成功、遵循 Retry-After）。已部署 audiobook.tumei.online 并推送 GitHub。
+
+\>> 点击发布到网站按钮后，应该有结果反馈发布成功与否；目前先不管访问权限的问题，先把系统改成管理员上传书籍后所有人都可以访问。 Show clear publish success/failure feedback; temporarily open every published book to all users.
+
+**Final report (EN):**
+
+1. **Publish feedback in the dialog.** The publish dialog no longer closes silently into a corner toast. On success it switches to a result view — big ✅ "发布成功！", the book's title/chapter/audio counts, its visibility, and "用户刷新书架即可看到" — which stays open until the admin clicks 关闭. On failure it shows ❌ with the exact reason, keeps the form visible, and the confirm button becomes 重试; a wrong admin password clears the saved one and refocuses the password field, and the message reassures that the book stays safe on the local machine.
+2. **All books open to everyone (temporary).** Per request, per-book access control is bypassed for now: every logged-in user's shelf shows all published books; the access-code field in the publish dialog is hidden (publishes default to public); and the one existing server book was flipped to public. The permission machinery (API, ✏️ editor, catalog access lists) is intact and commented for easy re-enable — restoring per-code filtering is a one-line change back to visibleBooks() plus unhiding the field.
+316 tests pass. Deployed to audiobook.tumei.online and pushed to GitHub.
+
+**最终报告（中文）：**
+
+1. **发布结果直接显示在弹窗里。** 点"发布"后不再是悄悄关窗+角落提示：成功时弹窗切换为结果页——大号 ✅"发布成功！"、书名/章节数/音频数、可见范围、"用户刷新书架即可看到"，看清后手动点"关闭"；失败时显示 ❌ 和具体原因，表单保留、按钮变为"重试"；密码错误会自动清除已存密码并让你重输，并提示书籍仍在本机不会丢失。
+2. **临时开放全部书籍（按要求）。** 目前跳过按书授权：所有登录用户的书架显示全部已发布书籍；发布弹窗隐藏访问码栏（发布默认公开）；服务器上现有书籍已全部设为 public。权限机制（API、✏️ 权限编辑、目录中的访问码列表）全部保留并加了注释，日后恢复只需一行改回 visibleBooks() 并取消隐藏访问码栏。
+316 个测试通过。已部署 audiobook.tumei.online 并推送 GitHub。
