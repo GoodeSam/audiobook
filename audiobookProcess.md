@@ -516,3 +516,19 @@ Verified live in a real browser: progress dialog with MB counter, player opens a
 3. **长书自动分章。** 源文件没有章节结构的书（比如整本解析成一章）上传时自动分割：超过约 9000 字符的章节按段落边界均衡切成约 6000 字符的部分，标题为"原标题 (i/n)"（接入了此前未使用的 content-splitter 模块）。章节变小 → 生成更快、MP3 更小、用户下载更快。
 4. **429 频繁的原因与修复。** 逐句模式此前每次 Generate Audio 都把全部句子重新翻译一遍——反复测试同样内容会重复消耗免费接口的 IP 配额。现已加入持久化的句子翻译缓存（IndexedDB）：每个句子一生只翻一次，重新生成时直接命中缓存（提示"翻译缓存命中 N 句"），只有新句子才请求接口。
 已在真实浏览器线上验证：进度框 MB 计数、下载完成后播放器打开、徽章变为 ✓ 已下载。新增 6 个测试（共 333 个，全部通过）。已部署并推送。
+
+\>> 此时改为使用 Google 的免费翻译。 Switch to Google's free translation while Microsoft is rate-limited.
+
+**Final report (EN):** Translation now falls back to Google automatically — no waiting out Microsoft's limit window.
+
+1. **New provider module** `src/google-translator.js`: uses Google's public gtx endpoint (`translate.googleapis.com/translate_a/t`), batch-capable (one form field per text, one request per 25-sentence batch), no API key, CORS-friendly. Language codes are mapped (zh-Hans → zh-CN); both fixed-source and auto-detect response shapes are parsed. Verified working live from the browser.
+2. **Automatic fallback**: whenever Microsoft returns 429, the same batch is immediately retried against Google. If Google succeeds the flow continues seamlessly (progress shows "⚡ 微软翻译限流 — 已自动切换 Google 翻译继续"); if Google is unreachable the original Microsoft backoff/retry chain resumes. Applies everywhere — paragraph translation, sentence-repeat mode, and the sentence cache stores the result regardless of provider.
+3. Note: Google must be reachable from the admin's machine (translation runs admin-side only; end users in mainland China are unaffected).
+11 new tests (341 total, all pass). Deployed to audiobook.tumei.online and pushed to GitHub. (A background probe is watching Microsoft's limit; it was still 429 at deploy time — with the fallback this no longer blocks work.)
+
+**最终报告（中文）：** 翻译遇到微软限流时自动切换 Google，免去等待。
+
+1. **新翻译模块** `src/google-translator.js`：使用 Google 公开的 gtx 端点（`translate.googleapis.com/translate_a/t`），支持批量（每批 25 句一次请求）、无需 API key、浏览器跨域可用。语言代码自动映射（zh-Hans → zh-CN），固定源语言和自动检测两种返回格式都能解析。已在浏览器实测可用。
+2. **自动切换**：微软返回 429 时，同一批句子立即改用 Google 翻译，成功则无缝继续（进度框显示"⚡ 微软翻译限流 — 已自动切换 Google 翻译继续"）；若 Google 也不可达则回到微软的退避重试。段落翻译、逐句模式全部生效；翻译缓存对两个来源的结果一视同仁。
+3. 说明：Google 需要管理员电脑的网络可达（翻译只在管理员端进行，大陆用户端不受影响）。
+新增 11 个测试（共 341 个，全部通过）。已部署并推送 GitHub。（后台仍在探测微软限流，部署时仍为 429——但有了自动切换，这不再阻塞任何操作。）
