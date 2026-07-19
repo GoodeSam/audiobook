@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { apiOrigin, normalizeAccessInput, accessToInput } from './library-api.js';
+import { apiOrigin, normalizeAccessInput, accessToInput, makePublishId } from './library-api.js';
 
 describe('apiOrigin', () => {
   it('uses same origin on the production site', () => {
@@ -35,6 +35,29 @@ describe('normalizeAccessInput', () => {
 
   it('splits on Chinese commas, 、 and whitespace too', () => {
     expect(normalizeAccessInput('alice，bob、carol dave')).toBe('alice,bob,carol,dave');
+  });
+});
+
+describe('makePublishId', () => {
+  it('strips characters the server rejects (parens, dots, spaces)', () => {
+    expect(makePublishId('Self-Talk 6-16 (Organized) copy 2')).toBe('self-talk-6-16-organized-copy-2');
+  });
+
+  it('drops non-latin characters but keeps the latin part', () => {
+    expect(makePublishId('演示 · The Quiet Village')).toBe('the-quiet-village');
+  });
+
+  it('gives pure-Chinese titles a stable hashed id', () => {
+    const id = makePublishId('自言自语');
+    expect(id).toMatch(/^book-[a-z0-9]+$/);
+    expect(makePublishId('自言自语')).toBe(id); // deterministic
+    expect(makePublishId('另一本书')).not.toBe(id);
+  });
+
+  it('caps length at 60 and never ends with a dash', () => {
+    const id = makePublishId('a'.repeat(59) + ' tail words here');
+    expect(id.length).toBeLessThanOrEqual(60);
+    expect(id.endsWith('-')).toBe(false);
   });
 });
 

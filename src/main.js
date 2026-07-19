@@ -32,7 +32,7 @@ import {
   normalizeAccessInput, accessToInput,
   getSavedToken, saveToken, clearToken,
   uploadPublishZip, setBookAccess, setValidCodes,
-  deleteBook as apiDeleteBook,
+  deleteBook as apiDeleteBook, makePublishId,
 } from './library-api.js';
 
 // ── State ──
@@ -2219,7 +2219,7 @@ async function doPublishToSite() {
   publishResult.hidden = true;
   publishModalStatus.textContent = '正在打包…';
   try {
-    const publishId = makeBookId(state.book.title);
+    const publishId = makePublishId(state.book.title);
     const { blob, manifest } = await buildPublishZip(
       state.book, publishId, state.audioBlobs, state.audioTimelines, state.audioModes
     );
@@ -2363,7 +2363,7 @@ btnExportPublish.addEventListener('click', async () => {
     return;
   }
   try {
-    const publishId = makeBookId(state.book.title);
+    const publishId = makePublishId(state.book.title);
     const { blob, filename, manifest } = await buildPublishZip(
       state.book, publishId, state.audioBlobs, state.audioTimelines, state.audioModes
     );

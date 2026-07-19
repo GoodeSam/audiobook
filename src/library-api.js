@@ -34,6 +34,24 @@ export function accessToInput(access) {
   return access === 'public' || !access ? 'public' : (access || []).join(', ');
 }
 
+/**
+ * Server-safe book id from a title: lowercase [a-z0-9-] slug, must start
+ * alphanumeric, ≤60 chars. Titles with no latin letters/digits (e.g. pure
+ * Chinese) get a stable hash id so republishing overwrites the same book.
+ */
+export function makePublishId(title) {
+  const raw = (title || '').trim();
+  const slug = raw.toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+    .replace(/-+$/g, '');
+  if (slug) return slug;
+  let h = 0;
+  for (const ch of raw) h = (h * 31 + ch.codePointAt(0)) | 0;
+  return 'book-' + (h >>> 0).toString(36);
+}
+
 export function getSavedToken() {
   return localStorage.getItem(TOKEN_KEY) || '';
 }
