@@ -67,8 +67,31 @@ export async function fetchRemoteBook(bookId, baseUrl = '') {
   return res.json();
 }
 
-export async function fetchRemoteAudio(bookId, audioFile, baseUrl = '') {
-  const res = await fetch(`${baseUrl}${LIBRARY_PATH}/${encodeURIComponent(bookId)}/${audioFile}`);
+/**
+ * Download a chapter MP3, optionally streaming progress.
+ * @param {object} [opts] - { onProgress(loadedBytes, totalBytes), signal }
+ *   totalBytes is 0 when the server omits Content-Length.
+ */
+export async function fetchRemoteAudio(bookId, audioFile, baseUrl = '', opts = {}) {
+  const { onProgress, signal } = opts;
+  const res = await fetch(
+    `${baseUrl}${LIBRARY_PATH}/${encodeURIComponent(bookId)}/${audioFile}`,
+    signal ? { signal } : undefined
+  );
   if (!res.ok) throw new Error(`Audio unavailable (${res.status})`);
-  return res.blob();
+  if (!onProgress || !res.body || typeof res.body.getReader !== 'function') {
+    return res.blob();
+  }
+  const total = Number(res.headers?.get?.('content-length')) || 0;
+  const reader = res.body.getReader();
+  const chunks = [];
+  let loaded = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.length;
+    onProgress(loaded, total);
+  }
+  return new Blob(chunks, { type: 'audio/mpeg' });
 }

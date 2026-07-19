@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitIntoParts, calculateVariance } from './content-splitter.js';
+import { splitIntoParts, calculateVariance, autoSplitChapters } from './content-splitter.js';
 
 describe('calculateVariance', () => {
   it('returns 0 for equal-sized parts', () => {
@@ -195,5 +195,41 @@ describe('splitIntoParts', () => {
       const parts = splitIntoParts(chapters, { minParts: 15 });
       expect(parts.length).toBeGreaterThanOrEqual(15);
     });
+  });
+});
+
+describe('autoSplitChapters', () => {
+  const para = 'A sentence of text that is fairly ordinary here. ';
+  const longMarkdown = Array.from({ length: 60 }, () => para.repeat(5).trim()).join('\n\n');
+
+  it('leaves short chapters untouched (same array identity)', () => {
+    const chapters = [{ title: 'Short', markdown: 'Just a little text.', translatedMarkdown: null }];
+    expect(autoSplitChapters(chapters)).toBe(chapters);
+  });
+
+  it('splits an oversized chapter into balanced numbered parts', () => {
+    const chapters = [{ title: 'The Book', markdown: longMarkdown, translatedMarkdown: '旧译文' }];
+    const out = autoSplitChapters(chapters, { triggerChars: 9000, targetChars: 6000 });
+    expect(out.length).toBeGreaterThan(1);
+    expect(out[0].title).toBe(`The Book (1/${out.length})`);
+    expect(out[out.length - 1].title).toBe(`The Book (${out.length}/${out.length})`);
+    // Stale translation must not survive the split
+    expect(out.every(c => c.translatedMarkdown === null)).toBe(true);
+    // No content lost, no mid-paragraph cuts
+    const rejoined = out.map(c => c.markdown).join('\n\n');
+    expect(rejoined.split(/\n\n+/).length).toBe(longMarkdown.split(/\n\n+/).length);
+    // Parts are reasonably balanced
+    const sizes = out.map(c => c.markdown.length);
+    expect(Math.max(...sizes)).toBeLessThan(Math.min(...sizes) * 2.5);
+  });
+
+  it('keeps short chapters intact while splitting only the long one', () => {
+    const chapters = [
+      { title: 'Intro', markdown: 'Short intro.', translatedMarkdown: null },
+      { title: 'Body', markdown: longMarkdown, translatedMarkdown: null },
+    ];
+    const out = autoSplitChapters(chapters, { triggerChars: 9000, targetChars: 6000 });
+    expect(out[0].title).toBe('Intro');
+    expect(out.filter(c => c.title.startsWith('Body (')).length).toBe(out.length - 1);
   });
 });

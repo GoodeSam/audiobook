@@ -1640,3 +1640,8 @@ body.user-mode .chapter-cb {
 .publish-site-btn.is-published:hover {
   background: #2f65b0;
 }
+
+.row-status-cloud {
+  background: #e8f1fb;
+  color: #3a7bd5;
+}

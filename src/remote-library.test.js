@@ -94,3 +94,60 @@ describe('buildPublishManifest', () => {
     expect(countAudioChapters(m)).toBe(1);
   });
 });
+
+describe('fetchRemoteAudio download progress', () => {
+  function mockStreamResponse(chunks, contentLength) {
+    let i = 0;
+    return {
+      ok: true,
+      headers: { get: (h) => (h === 'content-length' ? String(contentLength) : null) },
+      body: {
+        getReader: () => ({
+          read: async () =>
+            i < chunks.length ? { done: false, value: chunks[i++] } : { done: true },
+        }),
+      },
+      blob: async () => new Blob(chunks, { type: 'audio/mpeg' }),
+    };
+  }
+
+  it('streams chunks and reports loaded/total bytes', async () => {
+    const chunks = [new Uint8Array(1000), new Uint8Array(500)];
+    const orig = globalThis.fetch;
+    globalThis.fetch = async () => mockStreamResponse(chunks, 1500);
+    try {
+      const { fetchRemoteAudio } = await import('./remote-library.js');
+      const events = [];
+      const blob = await fetchRemoteAudio('book-x', '001.mp3', '', {
+        onProgress: (loaded, total) => events.push([loaded, total]),
+      });
+      expect(events).toEqual([[1000, 1500], [1500, 1500]]);
+      expect(blob.size).toBe(1500);
+      expect(blob.type).toBe('audio/mpeg');
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it('falls back to res.blob() when no onProgress is given', async () => {
+    const orig = globalThis.fetch;
+    globalThis.fetch = async () => mockStreamResponse([new Uint8Array(10)], 10);
+    try {
+      const { fetchRemoteAudio } = await import('./remote-library.js');
+      const blob = await fetchRemoteAudio('book-x', '001.mp3');
+      expect(blob.size).toBe(10);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+});
+
+describe('buildPublishManifest audio sizes', () => {
+  it('records each chapter audio blob size for download progress display', () => {
+    const book = { title: 'T', chapters: [{ title: 'c1', markdown: 'a' }, { title: 'c2', markdown: 'b' }] };
+    const blobs = { 0: new Blob([new Uint8Array(2048)]) };
+    const m = buildPublishManifest(book, 'id-t', blobs);
+    expect(m.chapters[0].audioSize).toBe(2048);
+    expect(m.chapters[1].audioSize).toBe(null);
+  });
+});

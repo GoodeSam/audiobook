@@ -12,7 +12,7 @@
  */
 
 const DB_NAME = 'audiobook-app';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let _dbPromise = null;
 
@@ -40,6 +40,10 @@ export function openDatabase() {
         const s = db.createObjectStore('progress', { keyPath: ['userId', 'bookId', 'chapterIndex'] });
         s.createIndex('userId', 'userId');
         s.createIndex('bookId', 'bookId');
+      }
+      if (!db.objectStoreNames.contains('translations')) {
+        // Machine-translation cache: key = "<from>|<to>|<source text>"
+        db.createObjectStore('translations', { keyPath: 'key' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -172,4 +176,25 @@ export async function getUserProgress(userId) {
 export async function getLastPlayed(userId, bookId) {
   const records = await getUserProgress(userId);
   return records.find(r => r.bookId === bookId) || null;
+}
+
+// ── Translation cache ──
+// Sentence-level machine translations, so regenerating audio for the same
+// content never re-hits the (rate-limited) translation API.
+
+export async function getCachedTranslation(key) {
+  const db = await openDatabase();
+  const rec = await reqToPromise(
+    db.transaction('translations').objectStore('translations').get(key)
+  );
+  return rec ? rec.text : null;
+}
+
+export async function putCachedTranslation(key, text) {
+  const db = await openDatabase();
+  return reqToPromise(
+    db.transaction('translations', 'readwrite')
+      .objectStore('translations')
+      .put({ key, text, at: Date.now() })
+  );
 }

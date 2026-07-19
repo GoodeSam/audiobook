@@ -30,6 +30,7 @@ export function buildPublishManifest(book, bookId, audioBlobs, audioTimelines = 
       markdown: ch.markdown,
       translatedMarkdown: ch.translatedMarkdown || null,
       audioFile: audioBlobs[idx] ? `${String(idx + 1).padStart(3, '0')}.mp3` : null,
+      audioSize: audioBlobs[idx] ? (audioBlobs[idx].size || 0) : null,
       audioMode: audioBlobs[idx] ? (audioModes[idx] || null) : null,
       timeline: audioBlobs[idx] ? (audioTimelines[idx] || null) : null,
     })),

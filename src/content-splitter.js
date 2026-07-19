@@ -163,3 +163,38 @@ function makePart(paraSlice, index) {
     chapterIndices: [...chapters],
   };
 }
+
+/**
+ * Auto-split overly long chapters into balanced parts at paragraph
+ * boundaries — for books whose source has no usable chapter structure
+ * (e.g. a whole book parsed as one chapter). Chapters at or under
+ * triggerChars pass through unchanged; split parts are titled
+ * "Title (i/n)" and lose any stale translation.
+ */
+export function autoSplitChapters(chapters, options = {}) {
+  const trigger = options.triggerChars || 9000;
+  const target = options.targetChars || 6000;
+  const out = [];
+  let changed = false;
+  for (const ch of chapters) {
+    const len = (ch.markdown || '').length;
+    if (len <= trigger) {
+      out.push(ch);
+      continue;
+    }
+    const nParts = Math.max(2, Math.round(len / target));
+    const parts = splitIntoParts([ch], { minParts: nParts });
+    if (parts.length <= 1) {
+      out.push(ch);
+      continue;
+    }
+    changed = true;
+    parts.forEach((p, i) => out.push({
+      ...ch,
+      title: `${ch.title} (${i + 1}/${parts.length})`,
+      markdown: p.paragraphs.join('\n\n'),
+      translatedMarkdown: null,
+    }));
+  }
+  return changed ? out : chapters;
+}

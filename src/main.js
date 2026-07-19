@@ -25,7 +25,9 @@ import {
   saveBook, getBook, listBooks, deleteBook,
   saveChapterAudio, getBookAudio,
   saveProgress, getProgress, getLastPlayed,
+  getCachedTranslation, putCachedTranslation,
 } from './db.js';
+import { autoSplitChapters } from './content-splitter.js';
 import { fetchCatalog, fetchRemoteBook, fetchRemoteAudio, visibleBooks, isKnownCode } from './remote-library.js';
 import { buildPublishZip, countAudioChapters } from './publish-export.js';
 import {
@@ -265,6 +267,11 @@ async function handleFile(file) {
         delete ch.html;
       }
     }
+
+    // Books without usable chapter structure parse as a few huge chapters —
+    // split them into balanced parts so translation, audio generation, and
+    // per-chapter user downloads stay manageable.
+    book.chapters = autoSplitChapters(book.chapters);
 
     // Merge previously saved translations for the same book (re-upload case)
     const bookId = makeBookId(book.title);
@@ -588,11 +595,17 @@ function updateChapterRow(idx) {
 function buildStatusLabel(ch, idx) {
   const hasAudio = !!state.audioBlobs[idx] || !!state.remoteAudioMeta[idx];
 
-  // User mode: only listenability matters
+  // User mode: show listenability + per-chapter download state
   if (!adminMode) {
-    return hasAudio
-      ? '<span class="row-status row-status-done" role="img" aria-label="Audio available">▶ 可听</span>'
-      : '<span class="row-status row-status-pending" role="img" aria-label="Text only">文本</span>';
+    if (state.audioBlobs[idx]) {
+      return '<span class="row-status row-status-done" role="img" aria-label="Downloaded">✓ 已下载</span>';
+    }
+    if (state.remoteAudioMeta[idx]) {
+      const size = state.remoteAudioMeta[idx].size;
+      const sizeLabel = size ? ` ${(size / 1048576).toFixed(1)}MB` : '';
+      return `<span class="row-status row-status-cloud" role="img" aria-label="Tap to download">☁️ 可听${sizeLabel}</span>`;
+    }
+    return '<span class="row-status row-status-pending" role="img" aria-label="Text only">文本</span>';
   }
 
   const hasTrCp = !!state.translationCheckpoints[idx];
@@ -909,16 +922,42 @@ function detectSourceLang() {
   return 'auto'; // Let Microsoft auto-detect the source language
 }
 
-/** Per-sentence translator used by the en-zh-en-sentence audio mode. */
+/**
+ * Per-sentence translator used by the en-zh-en-sentence audio mode.
+ * Backed by a persistent cache so regenerating audio for the same content
+ * never re-hits the rate-limited translation API.
+ */
 function sentenceModeTranslator() {
-  return (texts) => translateTexts(texts, detectSourceLang(), translateLangSelect.value, {
-    onWait: (seconds, attempt) => {
-      progressText.textContent = `⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 进度不会丢失`;
-    },
-    onChunk: (done, total) => {
-      progressText.textContent = `正在逐句翻译 ${done} / ${total} 句…`;
-    },
-  });
+  const from = detectSourceLang();
+  const to = translateLangSelect.value;
+  const keyFor = (text) => `${from}|${to}|${text}`;
+  return async (texts) => {
+    const cached = await Promise.all(
+      texts.map(t => getCachedTranslation(keyFor(t)).catch(() => null))
+    );
+    const missIdx = [];
+    cached.forEach((c, i) => { if (c === null) missIdx.push(i); });
+
+    let fresh = [];
+    if (missIdx.length > 0) {
+      const hits = texts.length - missIdx.length;
+      if (hits > 0) progressText.textContent = `翻译缓存命中 ${hits} 句，还需翻译 ${missIdx.length} 句…`;
+      fresh = await translateTexts(missIdx.map(i => texts[i]), from, to, {
+        onWait: (seconds, attempt) => {
+          progressText.textContent = `⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 进度不会丢失`;
+        },
+        onChunk: (done, total) => {
+          progressText.textContent = `正在逐句翻译 ${done} / ${total} 句…`;
+        },
+      });
+      missIdx.forEach((idx, j) => {
+        putCachedTranslation(keyFor(texts[idx]), fresh[j]).catch(() => {});
+      });
+    }
+
+    let j = 0;
+    return texts.map((_, i) => (cached[i] !== null ? cached[i] : fresh[j++]));
+  };
 }
 
 // ── Audio generation ──
@@ -1317,6 +1356,7 @@ function hideProgress() {
 btnCancel.addEventListener('click', () => {
   cancelGeneration();
   cancelTranslation();
+  if (_audioDownloadAbort) _audioDownloadAbort.abort();
 });
 
 // ── Utilities ──
@@ -1836,18 +1876,44 @@ function findAudioChapter(from, dir) {
   return null;
 }
 
-/** Make sure a chapter's audio blob is in memory, downloading it if remote. */
+const fmtMB = (bytes) => (bytes / 1048576).toFixed(1);
+let _audioDownloadAbort = null;
+
+/**
+ * Make sure a chapter's audio blob is in memory, downloading it if remote.
+ * Shows a progress dialog with streamed MB/percent (audio is stored per
+ * chapter, so only the requested chapter is downloaded); once downloaded
+ * it's cached in IndexedDB and plays instantly on later opens.
+ */
 async function ensureChapterAudio(idx) {
   if (state.audioBlobs[idx]) return true;
   const meta = state.remoteAudioMeta[idx];
   if (!meta || !state.remoteId) return false;
-  showToast('正在加载音频… Loading audio…', 'info', 3000);
-  const blob = await fetchRemoteAudio(state.remoteId, meta.file, import.meta.env.BASE_URL);
-  state.audioBlobs[idx] = blob;
-  persistAudio(idx); // cache for offline replay
-  if (state.activeChapter === idx) updateChapterButtons(idx);
-  updateChapterRow(idx);
-  return true;
+  const ch = state.book.chapters[idx];
+  showProgress(`⬇️ 下载本章音频: ${ch.title}`);
+  progressText.textContent = meta.size ? `共 ${fmtMB(meta.size)} MB，开始下载…` : '开始下载…';
+  _audioDownloadAbort = new AbortController();
+  try {
+    const blob = await fetchRemoteAudio(state.remoteId, meta.file, import.meta.env.BASE_URL, {
+      signal: _audioDownloadAbort.signal,
+      onProgress: (loaded, total) => {
+        const t = total || meta.size || 0;
+        if (t > 0) {
+          updateProgress(loaded, t, `已下载 ${fmtMB(loaded)} / ${fmtMB(t)} MB`);
+        } else {
+          progressText.textContent = `已下载 ${fmtMB(loaded)} MB`;
+        }
+      },
+    });
+    state.audioBlobs[idx] = blob;
+    persistAudio(idx); // cache for offline replay
+    if (state.activeChapter === idx) updateChapterButtons(idx);
+    updateChapterRow(idx);
+    return true;
+  } finally {
+    _audioDownloadAbort = null;
+    hideProgress();
+  }
 }
 
 async function openPlayer(idx) {
@@ -1856,7 +1922,9 @@ async function openPlayer(idx) {
       const ok = await ensureChapterAudio(idx);
       if (!ok) return;
     } catch (err) {
-      showToast('音频加载失败，请检查网络后重试 (' + err.message + ')', 'error');
+      if (err.name !== 'AbortError') {
+        showToast('音频加载失败，请检查网络后重试 (' + err.message + ')', 'error');
+      }
       return;
     }
   }
@@ -2149,7 +2217,7 @@ async function openRemoteBook(entry) {
     state.remoteId = entry.id;
     data.chapters.forEach((ch, i) => {
       if (ch.audioFile) {
-        state.remoteAudioMeta[i] = { file: ch.audioFile };
+        state.remoteAudioMeta[i] = { file: ch.audioFile, size: ch.audioSize || 0 };
         if (ch.timeline) state.audioTimelines[i] = ch.timeline;
         if (ch.audioMode) state.audioModes[i] = ch.audioMode;
       }
