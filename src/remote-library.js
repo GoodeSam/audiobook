@@ -36,13 +36,20 @@ export function visibleBooks(catalog, code) {
 }
 
 /**
- * Whether an access code unlocks at least one book (or the catalog has
- * the code listed anywhere) — used to accept/reject a login attempt.
+ * Whether an access code is accepted for login: either pre-registered in
+ * the catalog's validCodes list (admin's issued codes) or already assigned
+ * to at least one book. A registered code with no books yet logs in to an
+ * empty shelf ("contact the admin to add books").
  */
 export function isKnownCode(catalog, code) {
   const norm = (code || '').trim().toLowerCase();
   if (!norm) return false;
-  if (!catalog || !Array.isArray(catalog.books)) return false;
+  if (!catalog) return false;
+  if (Array.isArray(catalog.validCodes) &&
+      catalog.validCodes.some(c => String(c).toLowerCase() === norm)) {
+    return true;
+  }
+  if (!Array.isArray(catalog.books)) return false;
   return catalog.books.some(b =>
     Array.isArray(b.access) && b.access.some(c => String(c).toLowerCase() === norm)
   );

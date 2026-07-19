@@ -46,6 +46,13 @@ describe('isKnownCode', () => {
     expect(isKnownCode(catalog, 'BOB')).toBe(true);
   });
 
+  it('accepts pre-registered codes even with no books assigned', () => {
+    const withCodes = { ...catalog, validCodes: ['beko288', 'CAZO678'] };
+    expect(isKnownCode(withCodes, 'beko288')).toBe(true);
+    expect(isKnownCode(withCodes, 'BEKO288')).toBe(true);
+    expect(isKnownCode(withCodes, 'cazo678')).toBe(true);
+  });
+
   it('rejects unknown or empty codes', () => {
     expect(isKnownCode(catalog, 'stranger')).toBe(false);
     expect(isKnownCode(catalog, '')).toBe(false);
