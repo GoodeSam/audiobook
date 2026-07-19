@@ -133,7 +133,49 @@ describe('translateText', () => {
       errorResponse(429),
     ]);
 
-    await expect(translateText('test', 'en', 'zh-Hans', fetchFn)).rejects.toThrow('429');
+    await expect(
+      translateBatch(['test'], 'en', 'zh-Hans', fetchFn, { maxRetries: 0 })
+    ).rejects.toThrow('429');
+  });
+
+  it('retries 429 with backoff and eventually succeeds', async () => {
+    _clearTokenCache();
+    const fetchFn = mockFetch([
+      okTextResponse('token'),
+      errorResponse(429),
+      errorResponse(429),
+      okJsonResponse([{ translations: [{ text: '你好' }] }]),
+    ]);
+
+    const waits = [];
+    const results = await translateBatch(['Hello'], 'en', 'zh-Hans', fetchFn, {
+      rateLimitDelays: [1, 1, 1],
+      onWait: (seconds, attempt) => waits.push(attempt),
+    });
+
+    expect(results).toEqual(['你好']);
+    expect(fetchFn.calls.length).toBe(4); // auth + 2 failures + success
+    expect(waits).toEqual([1, 2]);
+  });
+
+  it('honors the Retry-After header on 429', async () => {
+    _clearTokenCache();
+    const resp429 = {
+      ok: false,
+      status: 429,
+      headers: { get: (h) => (h.toLowerCase() === 'retry-after' ? '0.001' : null) },
+    };
+    const fetchFn = mockFetch([
+      okTextResponse('token'),
+      resp429,
+      okJsonResponse([{ translations: [{ text: 'ok' }] }]),
+    ]);
+
+    const start = Date.now();
+    // Default table would wait 5s — the tiny Retry-After must win
+    const results = await translateBatch(['x'], 'en', 'zh-Hans', fetchFn);
+    expect(results).toEqual(['ok']);
+    expect(Date.now() - start).toBeLessThan(2000);
   });
 
   it('throws on malformed response', async () => {

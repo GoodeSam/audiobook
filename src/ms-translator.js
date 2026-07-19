@@ -15,6 +15,7 @@ import { splitParagraphs, isSkipParagraph, parseHeading } from './paragraph-util
 const MS_AUTH_URL = 'https://edge.microsoft.com/translate/auth';
 const MS_TRANSLATE_URL = 'https://api.cognitive.microsofttranslator.com/translate';
 const BATCH_SIZE = 25; // Microsoft API limit per request
+const BATCH_INTERVAL_MS = 350; // pause between batch calls to stay under the rate limit
 
 let _cachedToken = null;
 let _tokenExpiry = 0;
@@ -60,15 +61,38 @@ export async function translateText(text, from, to, fetchFn = fetch) {
  * @param {string} from - Source language code.
  * @param {string} to - Target language code.
  * @param {Function} fetchFn - Fetch implementation (for testing).
+ * @param {object} [opts]
+ * @param {number} [opts.maxRetries] - Retry attempts after the first try.
+ * @param {Function} [opts.onWait] - Called (seconds, attempt) before a retry wait.
+ * @param {number[]} [opts.rateLimitDelays] - Override 429 backoff (ms), for tests.
  * @returns {Promise<string[]>} Translated texts in same order.
  */
-const MAX_RETRIES = 2;
-const RETRY_DELAYS = [1000, 3000]; // Exponential backoff
+const MAX_RETRIES = 5;
+// 429 means the free endpoint is rate-limiting us — it typically needs tens
+// of seconds to clear, far longer than transient 5xx/401 hiccups.
+const RATE_LIMIT_DELAYS = [5000, 15000, 30000, 60000, 90000];
+const TRANSIENT_DELAYS = [1000, 3000, 5000, 10000, 15000];
+const MAX_RETRY_AFTER_MS = 120000;
 
-export async function translateBatch(texts, from, to, fetchFn = fetch) {
+/** Sleep that rejects immediately when the current translation is cancelled. */
+function abortableSleep(ms) {
+  return new Promise((resolve, reject) => {
+    const signal = _abortController?.signal;
+    const abortErr = () => { const e = new Error('Translation cancelled'); e.name = 'AbortError'; return e; };
+    if (signal?.aborted) return reject(abortErr());
+    const timer = setTimeout(() => { cleanup(); resolve(); }, ms);
+    const onAbort = () => { cleanup(); reject(abortErr()); };
+    const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); };
+    signal?.addEventListener('abort', onAbort);
+  });
+}
+
+export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}) {
   if (texts.length === 0) return [];
+  const maxRetries = opts.maxRetries ?? MAX_RETRIES;
+  const rateLimitDelays = opts.rateLimitDelays ?? RATE_LIMIT_DELAYS;
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const token = await msGetAuthToken(fetchFn);
     const params = new URLSearchParams({ 'api-version': '3.0', to });
     if (from && from !== 'auto') {
@@ -96,14 +120,27 @@ export async function translateBatch(texts, from, to, fetchFn = fetch) {
 
     // Retry on 401 (token expired), 429 (rate limit), 5xx (server error)
     const retryable = resp.status === 401 || resp.status === 429 || resp.status >= 500;
-    if (!retryable || attempt === MAX_RETRIES) {
-      throw new Error(`Microsoft Translate error: ${resp.status}`);
+    if (!retryable || attempt === maxRetries) {
+      throw new Error(resp.status === 429
+        ? 'Microsoft Translate error: 429 — 翻译服务限流，已自动重试多次。进度已保存，请几分钟后再点 Translate 继续。'
+        : `Microsoft Translate error: ${resp.status}`);
     }
 
     // Clear token cache on 401 so next attempt gets a fresh token
     if (resp.status === 401) _clearTokenCache();
 
-    await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt] || 3000));
+    let delay;
+    if (resp.status === 429) {
+      // Honor the server's Retry-After (seconds) when present
+      const retryAfter = Number(resp.headers?.get?.('retry-after'));
+      delay = retryAfter > 0
+        ? Math.min(retryAfter * 1000, MAX_RETRY_AFTER_MS)
+        : (rateLimitDelays[attempt] ?? rateLimitDelays[rateLimitDelays.length - 1]);
+      if (opts.onWait) opts.onWait(Math.round(delay / 1000), attempt + 1);
+    } else {
+      delay = TRANSIENT_DELAYS[attempt] ?? TRANSIENT_DELAYS[TRANSIENT_DELAYS.length - 1];
+    }
+    await abortableSleep(delay);
   }
 }
 
@@ -134,6 +171,7 @@ export async function translateChapter(markdown, from, to, options = {}) {
   const {
     fetchFn = fetch,
     onProgress,
+    onStatus,
     startIndex = 0,
     existingTranslations = [],
     onCheckpoint,
@@ -168,9 +206,17 @@ export async function translateChapter(markdown, from, to, options = {}) {
   let batchTexts = [];
   let batchEntryIndices = [];
 
+  let firstFlush = true;
+
   async function flushCurrentBatch(lastParaIndex) {
     if (batchTexts.length === 0) return;
-    const results = await translateBatch(batchTexts, from, to, fetchFn);
+    if (!firstFlush) await abortableSleep(BATCH_INTERVAL_MS);
+    firstFlush = false;
+    const results = await translateBatch(batchTexts, from, to, fetchFn, {
+      onWait: (seconds, attempt) => {
+        if (onStatus) onStatus(`⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 进度不会丢失`);
+      },
+    });
     for (let r = 0; r < results.length; r++) {
       entries[batchEntryIndices[r]].result = results[r];
       progress++;

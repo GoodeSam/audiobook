@@ -811,6 +811,7 @@ async function translateSingleChapter(idx) {
       startIndex: cp ? cp.completedIndex : 0,
       existingTranslations: cp ? cp.translatedParagraphs : [],
       onProgress: (current, total) => updateProgress(current, total, `Translating: ${current} / ${total} paragraphs`),
+      onStatus: (msg) => { progressText.textContent = msg; },
       onCheckpoint: (cpData) => { state.translationCheckpoints[idx] = cpData; },
     });
     ch.translatedMarkdown = translated;
@@ -872,6 +873,7 @@ async function translateMultipleChapters(indices) {
         onProgress: (current) => {
           tracker.advance(completedParas + current);
         },
+        onStatus: (msg) => { progressText.textContent = msg; },
         onCheckpoint: (cpData) => { state.translationCheckpoints[idx] = cpData; },
       });
 
@@ -1053,6 +1055,7 @@ async function generateMultipleChapters(indices) {
             onProgress: (current, paraTotal) => {
               tracker.advance(i + current / paraTotal);
             },
+            onStatus: (msg) => { progressText.textContent = msg; },
             onCheckpoint: (cpData) => { state.translationCheckpoints[idx] = cpData; },
           });
           ch.translatedMarkdown = translated;
