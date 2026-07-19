@@ -64,3 +64,6 @@ print('catalog updated:', len(catalog['books']), 'books')
 PYEOF"
 
 echo "OK -> https://audiobook.tumei.online/ (access: $ACCESS)"
+
+# Refresh the admin spreadsheet's book list (best-effort)
+bash "$(dirname "$0")/sync-books.sh" || echo "note: spreadsheet not updated - run deploy/sync-books.sh manually"

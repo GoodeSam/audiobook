@@ -49,3 +49,6 @@ with open(path, 'w') as f:
 print('access updated for', book_id)
 PYEOF"
 echo "OK: $BOOK_ID -> $ACCESS"
+
+# Refresh the admin spreadsheet's book list (best-effort)
+bash "$(dirname "$0")/sync-books.sh" || echo "note: spreadsheet not updated - run deploy/sync-books.sh manually"
