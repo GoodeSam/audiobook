@@ -3,6 +3,8 @@ import {
   stripMarkdown,
   splitIntoParagraphs,
   buildChapterSegments,
+  buildSentenceModeSegments,
+  getBeepBlob,
 } from './edge-tts.js';
 
 describe('stripMarkdown', () => {
@@ -206,5 +208,82 @@ describe('buildChapterSegments', () => {
 
     expect(segments.length).toBe(1);
     expect(segments[0].lang).toBe('en');
+  });
+});
+
+describe('en-zh-en paragraph mode with separator chime', () => {
+  it('inserts a beep between paragraph repeat-groups but not before the first', () => {
+    const segments = buildChapterSegments({
+      originalText: 'First paragraph.\n\nSecond paragraph.',
+      translatedText: '第一段。\n\n第二段。',
+      audioMode: 'en-zh-en',
+    });
+    const langs = segments.map(s => s.lang);
+    expect(langs).toEqual(['en', 'zh', 'en', 'beep', 'en', 'zh', 'en']);
+  });
+
+  it('single paragraph gets no beep', () => {
+    const segments = buildChapterSegments({
+      originalText: 'Only one.',
+      translatedText: '只有一段。',
+      audioMode: 'en-zh-en',
+    });
+    expect(segments.some(s => s.lang === 'beep')).toBe(false);
+  });
+});
+
+describe('buildSentenceModeSegments', () => {
+  it('repeats each sentence EN→ZH→EN with beeps between sentence groups', async () => {
+    const translateTexts = vi.fn(async (texts) => texts.map(t => `中(${t})`));
+    const segments = await buildSentenceModeSegments({
+      originalText: 'Hello world. How are you?',
+      translateTexts,
+    });
+    expect(translateTexts).toHaveBeenCalledWith(['Hello world.', 'How are you?']);
+    expect(segments.map(s => s.lang)).toEqual(
+      ['en', 'zh', 'en', 'beep', 'en', 'zh', 'en']
+    );
+    expect(segments[0].text).toBe('Hello world.');
+    expect(segments[1].text).toBe('中(Hello world.)');
+    expect(segments[2].text).toBe('Hello world.');
+    expect(segments[4].text).toBe('How are you?');
+  });
+
+  it('keeps paragraph indexes for player highlighting', async () => {
+    const segments = await buildSentenceModeSegments({
+      originalText: 'Para one.\n\nPara two.',
+      translateTexts: async (texts) => texts.map(() => '译'),
+    });
+    expect(segments.filter(s => s.paraIndex === 0).length).toBeGreaterThan(0);
+    expect(segments.filter(s => s.paraIndex === 1).length).toBeGreaterThan(0);
+  });
+
+  it('speaks already-Chinese sentences once without translation', async () => {
+    const translateTexts = vi.fn(async (texts) => texts.map(() => '译'));
+    const segments = await buildSentenceModeSegments({
+      originalText: '这是中文句子。',
+      translateTexts,
+    });
+    expect(translateTexts).not.toHaveBeenCalled();
+    expect(segments.map(s => s.lang)).toEqual(['zh']);
+  });
+
+  it('strips markdown before splitting sentences', async () => {
+    const segments = await buildSentenceModeSegments({
+      originalText: '# Title\n\n**Bold** sentence.',
+      translateTexts: async (texts) => texts.map(() => '译'),
+    });
+    expect(segments.every(s => !s.text.includes('*') && !s.text.includes('#'))).toBe(true);
+  });
+});
+
+describe('getBeepBlob', () => {
+  it('decodes a small CBR mp3 blob and caches it', () => {
+    const a = getBeepBlob();
+    const b = getBeepBlob();
+    expect(a).toBe(b);
+    expect(a.type).toBe('audio/mpeg');
+    expect(a.size).toBeGreaterThan(2000);
+    expect(a.size).toBeLessThan(10000);
   });
 });

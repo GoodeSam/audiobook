@@ -154,3 +154,6 @@ Ran 2 shell commands
 
 ![](./assets/images/clipboard-1784458985208-jtb6-1784458985210-7mar87sh.png)
 
+增加repeat each sentence的选项，并将 EN ZH EN(repeat each sentence)设为默认选择
+
+在EN ZH EN模式中上一句的最后一次英语和下一句开始的英语音频之间有一个间隔提示音

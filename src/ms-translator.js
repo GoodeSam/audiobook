@@ -144,6 +144,28 @@ export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}
   }
 }
 
+/**
+ * Translate an arbitrary list of texts, chunked to the API batch limit,
+ * with the same pacing/backoff as chapter translation.
+ *
+ * @param {string[]} texts
+ * @param {string} from - Source language ('auto' allowed).
+ * @param {string} to - Target language.
+ * @param {object} [opts] - { fetchFn, onWait, onChunk(done,total) }
+ * @returns {Promise<string[]>} translations, same order as texts.
+ */
+export async function translateTexts(texts, from, to, opts = {}) {
+  const { fetchFn = fetch, onWait, onChunk } = opts;
+  const out = [];
+  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+    if (i > 0) await new Promise(r => setTimeout(r, BATCH_INTERVAL_MS));
+    const chunk = await translateBatch(texts.slice(i, i + BATCH_SIZE), from, to, fetchFn, { onWait });
+    out.push(...chunk);
+    if (onChunk) onChunk(Math.min(i + BATCH_SIZE, texts.length), texts.length);
+  }
+  return out;
+}
+
 // shouldSkipParagraph aliased from shared utility
 const shouldSkipParagraph = isSkipParagraph;
 

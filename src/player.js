@@ -267,12 +267,30 @@ export class Player {
     para.classList.add(entry.lang === 'zh' ? 'zh-active' : 'active');
 
     let target = para;
-    if (entry.lang === 'en' && sentIdx >= 0) {
-      const spans = para.querySelectorAll('.player-sentence');
-      // Sentence indices align only when the segment covers the whole paragraph
-      if (entry.sentences && spans.length === entry.sentences.length && spans[sentIdx]) {
-        spans[sentIdx].classList.add('speaking');
-        target = spans[sentIdx];
+    const spans = para.querySelectorAll('.player-sentence');
+    const spanByText = (text) => {
+      const t = (text || '').trim();
+      return t ? Array.from(spans).find(s => s.textContent.trim() === t) : null;
+    };
+    if (entry.lang === 'en' && entry.sentences) {
+      let span = null;
+      if (sentIdx >= 0 && spans.length === entry.sentences.length && spans[sentIdx]) {
+        // Segment covers the whole paragraph — indices align
+        span = spans[sentIdx];
+      } else if (entry.sentences.length === 1) {
+        // Sentence-repeat mode: the segment is one sentence — find it by text
+        span = spanByText(entry.sentences[0].text);
+      }
+      if (span) {
+        span.classList.add('speaking');
+        target = span;
+      }
+    } else if (entry.lang === 'zh' && entry.srcSentence) {
+      // Chinese translation of one sentence — keep that sentence highlighted
+      const span = spanByText(entry.srcSentence);
+      if (span) {
+        span.classList.add('speaking');
+        target = span;
       }
     }
     this._autoScrollTo(target);

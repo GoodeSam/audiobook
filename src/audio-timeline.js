@@ -88,6 +88,8 @@ export function buildTimeline(segments, byteSizes) {
     if (seg.lang === 'en') {
       entry.sentences = allocateSentenceSpans(seg.text, t, dur);
     }
+    // Sentence-repeat mode: which English sentence a ZH translation belongs to
+    if (seg.srcSentence) entry.srcSentence = seg.srcSentence;
     entries.push(entry);
     t += dur;
   }

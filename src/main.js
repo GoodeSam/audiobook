@@ -12,7 +12,7 @@ import { parseHTML } from './html-parser.js';
 import { htmlToMarkdown, cleanMarkdown } from './html-to-markdown.js';
 import { isSpeechRecognitionSupported, createSpeechRecognition } from './speech-to-text.js';
 import { generateChapterAudio, cancelGeneration, synthesizeText, validateVoiceSettings } from './edge-tts.js';
-import { translateChapter, cancelTranslation, resetTranslationState } from './ms-translator.js';
+import { translateChapter, translateTexts, cancelTranslation, resetTranslationState } from './ms-translator.js';
 import { sanitizeFilename, exportMultipleChapters, extractImagesFromMarkdown } from './chapter-export.js';
 import { ProgressTracker } from './progress-tracker.js';
 import { buildBilingualMarkdown } from './bilingual-view.js';
@@ -329,7 +329,10 @@ btnToggleSettings.addEventListener('click', () => {
 });
 
 function updateConfigSummary() {
-  const modeLabels = { original: 'Original', translated: 'Translated', bilingual: 'Bilingual', 'en-zh-en': 'EN→ZH→EN' };
+  const modeLabels = {
+    original: 'Original', translated: 'Translated', bilingual: 'Bilingual',
+    'en-zh-en': 'EN→ZH→EN', 'en-zh-en-sentence': 'EN→ZH→EN 逐句',
+  };
   summaryMode.textContent = modeLabels[audioModeSelect.value] || 'Bilingual';
   const langEl = translateLangSelect.selectedOptions[0];
   summaryLang.textContent = '→ ' + (langEl ? langEl.textContent : 'Chinese');
@@ -906,6 +909,18 @@ function detectSourceLang() {
   return 'auto'; // Let Microsoft auto-detect the source language
 }
 
+/** Per-sentence translator used by the en-zh-en-sentence audio mode. */
+function sentenceModeTranslator() {
+  return (texts) => translateTexts(texts, detectSourceLang(), translateLangSelect.value, {
+    onWait: (seconds, attempt) => {
+      progressText.textContent = `⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 进度不会丢失`;
+    },
+    onChunk: (done, total) => {
+      progressText.textContent = `正在逐句翻译 ${done} / ${total} 句…`;
+    },
+  });
+}
+
 // ── Audio generation ──
 
 btnGenerateChapter.addEventListener('click', async () => {
@@ -985,6 +1000,8 @@ async function generateSingleChapter(idx) {
       speechRateZh: parseInt(speedZhRange.value),
       startIndex: acp ? acp.completedIndex : 0,
       existingBlobs: acp ? acp.audioBlobs : [],
+      translateTexts: sentenceModeTranslator(),
+      onStatus: (msg) => { progressText.textContent = msg; },
       onProgress: (current, total) => {
         tracker.startPhase('generating', total);
         tracker.advance(current);
@@ -1101,6 +1118,8 @@ async function generateMultipleChapters(indices) {
             speechRateZh: parseInt(speedZhRange.value),
             startIndex: acp ? acp.completedIndex : 0,
             existingBlobs: acp ? acp.audioBlobs : [],
+            translateTexts: sentenceModeTranslator(),
+            onStatus: (msg) => { progressText.textContent = msg; },
             onProgress: (current, segTotal) => {
               tracker.advance(i + current / segTotal);
             },

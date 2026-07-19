@@ -14,8 +14,23 @@
 import { detectLanguage, splitByLanguage } from './language-utils.js';
 import { convertNumbersToChinese } from './number-to-chinese.js';
 import { buildTimeline, splitIntoSentences } from './audio-timeline.js';
+import { BEEP_MP3_BASE64 } from './beep-data.js';
 
 export { splitIntoSentences };
+
+/** Separator chime blob (same CBR format as Edge TTS output), decoded once. */
+let _beepBlob = null;
+export function getBeepBlob() {
+  if (!_beepBlob) {
+    const bin = atob(BEEP_MP3_BASE64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    _beepBlob = new Blob([bytes], { type: 'audio/mpeg' });
+  }
+  return _beepBlob;
+}
+
+const BEEP_SEGMENT = Object.freeze({ text: '', lang: 'beep' });
 
 const EDGE_TTS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
 const EDGE_TTS_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
@@ -247,11 +262,15 @@ export function buildChapterSegments({ originalText, translatedText, audioMode }
       }
     }
   } else if (audioMode === 'en-zh-en') {
-    // Per paragraph: original → translation → original again
+    // Per paragraph: original → translation → original again.
+    // A chime separates repeat-groups so listeners can tell where the
+    // closing EN of one paragraph ends and the next paragraph begins.
     const maxLen = Math.max(origParas.length, transParas.length);
     for (let i = 0; i < maxLen; i++) {
       const cleanOrig = i < origParas.length ? stripMarkdown(origParas[i]) : '';
       const cleanTrans = i < transParas.length ? stripMarkdown(transParas[i]) : '';
+      if (!cleanOrig.trim() && !cleanTrans.trim()) continue;
+      if (segments.length > 0) segments.push({ ...BEEP_SEGMENT, paraIndex: i });
       if (cleanOrig.trim()) splitParaIntoSegments(cleanOrig, segments, i);
       if (cleanTrans.trim()) splitParaIntoSegments(cleanTrans, segments, i);
       if (cleanOrig.trim()) splitParaIntoSegments(cleanOrig, segments, i);
@@ -265,6 +284,55 @@ export function buildChapterSegments({ originalText, translatedText, audioMode }
     }
   }
 
+  return segments;
+}
+
+/**
+ * Segments for 'en-zh-en-sentence' mode: every sentence is spoken
+ * EN → ZH → EN, with a chime separating sentence groups. The Chinese for
+ * each sentence comes from options.translateTexts (per-sentence machine
+ * translation at generation time — paragraph translation isn't required).
+ *
+ * @param {object} options
+ * @param {string} options.originalText - Original chapter markdown.
+ * @param {Function} options.translateTexts - async (string[]) => string[].
+ * @param {Function} [options.onStatus] - Status message callback.
+ * @returns {Promise<Array<{text, lang, paraIndex}>>}
+ */
+export async function buildSentenceModeSegments({ originalText, translateTexts, onStatus }) {
+  const origParas = splitIntoParagraphs(originalText || '');
+  const items = []; // one entry per sentence: { paraIndex, text, lang }
+  for (let p = 0; p < origParas.length; p++) {
+    const clean = stripMarkdown(origParas[p]);
+    if (!clean.trim()) continue;
+    for (const s of splitIntoSentences(clean)) {
+      items.push({ paraIndex: p, text: s, lang: detectLanguage(s) === 'zh' ? 'zh' : 'en' });
+    }
+  }
+
+  const enItems = items.filter(it => it.lang === 'en');
+  let translations = [];
+  if (enItems.length > 0) {
+    if (!translateTexts) throw new Error('en-zh-en-sentence mode requires a translator');
+    if (onStatus) onStatus(`正在逐句翻译 (${enItems.length} 句)…`);
+    translations = await translateTexts(enItems.map(it => it.text));
+  }
+  const zhFor = new Map();
+  enItems.forEach((it, i) => zhFor.set(it, (translations[i] || '').trim()));
+
+  const segments = [];
+  for (const it of items) {
+    if (segments.length > 0) segments.push({ ...BEEP_SEGMENT, paraIndex: it.paraIndex });
+    if (it.lang === 'zh') {
+      // Already-Chinese sentence: speak once, nothing to repeat
+      segments.push({ text: it.text, lang: 'zh', paraIndex: it.paraIndex });
+    } else {
+      segments.push({ text: it.text, lang: 'en', paraIndex: it.paraIndex });
+      const zh = zhFor.get(it);
+      if (zh) segments.push({ text: zh, lang: 'zh', paraIndex: it.paraIndex, srcSentence: it.text });
+      segments.push({ text: it.text, lang: 'en', paraIndex: it.paraIndex });
+    }
+  }
   return segments;
 }
 
@@ -315,9 +383,13 @@ export async function generateChapterAudio(options = {}) {
     startIndex = 0,
     existingBlobs = [],
     onCheckpoint,
+    translateTexts,
+    onStatus,
   } = options;
 
-  const segments = buildChapterSegments({ originalText, translatedText, audioMode });
+  const segments = audioMode === 'en-zh-en-sentence'
+    ? await buildSentenceModeSegments({ originalText, translateTexts, onStatus })
+    : buildChapterSegments({ originalText, translatedText, audioMode });
   if (segments.length === 0 && existingBlobs.length === 0) {
     throw new Error(`No content to synthesize in "${audioMode}" mode. Translation may be required.`);
   }
@@ -328,6 +400,12 @@ export async function generateChapterAudio(options = {}) {
     if (_cancelled) throw new Error('Audio generation cancelled');
 
     const seg = segments[i];
+    if (seg.lang === 'beep') {
+      audioBlobs.push(getBeepBlob());
+      if (onProgress) onProgress(i + 1, total);
+      if (onCheckpoint) onCheckpoint({ completedIndex: i + 1, totalSegments: total, audioBlobs });
+      continue;
+    }
     let voice = seg.lang === 'zh' ? voiceZh : voiceEn;
     let speechRate = seg.lang === 'zh' ? speechRateZh : speechRateEn;
 
