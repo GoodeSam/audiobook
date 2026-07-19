@@ -279,12 +279,16 @@
       <div class="progress-card modal-card" role="dialog" aria-modal="true" aria-labelledby="publish-modal-title">
         <h3 id="publish-modal-title">🚀 发布到 audiobook.tumei.online</h3>
         <p id="publish-modal-info" class="modal-info"></p>
-        <label class="modal-label">访问码（逗号分隔；留空或 public 为所有人可见）
-          <input id="publish-access-input" type="text" placeholder="alice, bob 或 public" autocomplete="off" autocapitalize="off">
-        </label>
-        <label class="modal-label">管理员密码（保存在本机，只需输入一次）
-          <input id="publish-token-input" type="password" placeholder="管理员密码" autocomplete="off">
-        </label>
+        <div id="publish-form">
+          <!-- 权限暂时全开放：访问码栏隐藏，发布默认 public；恢复时去掉 hidden -->
+          <label class="modal-label" id="publish-access-row" hidden>访问码（逗号分隔；留空或 public 为所有人可见）
+            <input id="publish-access-input" type="text" placeholder="alice, bob 或 public" autocomplete="off" autocapitalize="off">
+          </label>
+          <label class="modal-label">管理员密码（保存在本机，只需输入一次）
+            <input id="publish-token-input" type="password" placeholder="管理员密码" autocomplete="off">
+          </label>
+        </div>
+        <div id="publish-result" class="publish-result" hidden></div>
         <div class="progress-bar-container" id="publish-progress-row" hidden>
           <div id="publish-progress-bar" class="progress-bar"></div>
           <span id="publish-progress-percent" class="progress-percent">0%</span>

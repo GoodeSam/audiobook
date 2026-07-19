@@ -114,6 +114,8 @@ const publishProgressRow = $('publish-progress-row');
 const publishProgressBar = $('publish-progress-bar');
 const publishProgressPercent = $('publish-progress-percent');
 const publishModalStatus = $('publish-modal-status');
+const publishForm = $('publish-form');
+const publishResult = $('publish-result');
 const btnPublishCancel = $('btn-publish-cancel');
 const btnPublishConfirm = $('btn-publish-confirm');
 const fieldModal = $('field-modal');
@@ -1979,9 +1981,10 @@ async function renderShelf(prefetchedCatalog) {
   shelfEmpty.hidden = true;
   try {
     const catalog = prefetchedCatalog || await fetchCatalog(import.meta.env.BASE_URL);
-    const books = adminMode
-      ? (catalog.books || []).slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-      : visibleBooks(catalog, accessCode);
+    // 权限暂时全开放：所有登录用户都能看到全部书籍（按 2026-07 要求；
+    // 恢复按码过滤时改回 visibleBooks(catalog, accessCode)）
+    const books = (catalog.books || []).slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    void visibleBooks;
     shelfEmpty.hidden = books.length > 0;
 
     shelfAdminTools.hidden = !adminMode;
@@ -2163,11 +2166,40 @@ function openPublishModal() {
     `《${state.book.title}》 · ${state.book.chapters.length} 章 · ${audioCount} 段音频`;
   publishAccessInput.value = '';
   publishTokenInput.value = getSavedToken();
+  publishForm.hidden = false;
+  publishResult.hidden = true;
+  publishResult.textContent = '';
   publishProgressRow.hidden = true;
   publishModalStatus.textContent = '';
   btnPublishConfirm.disabled = false;
+  btnPublishConfirm.hidden = false;
+  btnPublishCancel.textContent = '取消';
   publishModal.hidden = false;
   (getSavedToken() ? publishAccessInput : publishTokenInput).focus();
+}
+
+/** Swap the publish modal into its result view (stays open until closed). */
+function showPublishResult(ok, lines) {
+  publishForm.hidden = ok; // failure keeps the form visible for a retry
+  publishProgressRow.hidden = true;
+  publishModalStatus.textContent = '';
+  publishResult.hidden = false;
+  publishResult.textContent = '';
+  publishResult.className = 'publish-result ' + (ok ? 'publish-ok' : 'publish-fail');
+  const icon = document.createElement('div');
+  icon.className = 'publish-result-icon';
+  icon.textContent = ok ? '✅' : '❌';
+  publishResult.appendChild(icon);
+  for (const [i, line] of lines.entries()) {
+    const p = document.createElement('p');
+    p.className = i === 0 ? 'publish-result-title' : 'publish-result-line';
+    p.textContent = line;
+    publishResult.appendChild(p);
+  }
+  btnPublishConfirm.hidden = ok;
+  btnPublishConfirm.disabled = false;
+  btnPublishConfirm.textContent = ok ? '发布' : '重试';
+  btnPublishCancel.textContent = '关闭';
 }
 
 async function doPublishToSite() {
@@ -2179,6 +2211,7 @@ async function doPublishToSite() {
   }
   const access = normalizeAccessInput(publishAccessInput.value);
   btnPublishConfirm.disabled = true;
+  publishResult.hidden = true;
   publishModalStatus.textContent = '正在打包…';
   try {
     const publishId = makeBookId(state.book.title);
@@ -2192,22 +2225,25 @@ async function doPublishToSite() {
       publishProgressBar.style.width = pct + '%';
       publishProgressPercent.textContent = pct + '%';
     });
-    publishModal.hidden = true;
     const who = result.book.access === 'public' ? '所有登录用户' : `访问码 ${result.book.access.join(', ')}`;
-    showToast(
-      `✅ 已发布《${result.book.title}》(${countAudioChapters(manifest)} 段音频) — ${who}立即可见`,
-      'success', 8000
-    );
+    showPublishResult(true, [
+      '发布成功！',
+      `《${result.book.title}》已上线 — ${result.book.chapterCount} 章 · ${countAudioChapters(manifest)} 段音频`,
+      `可见范围：${who}`,
+      '用户刷新书架即可看到这本书。',
+    ]);
     renderShelf();
   } catch (err) {
     if (err.badToken) {
       clearToken();
       publishTokenInput.value = '';
-      publishTokenInput.focus();
     }
-    publishProgressRow.hidden = true;
-    publishModalStatus.textContent = '发布失败: ' + err.message;
-    btnPublishConfirm.disabled = false;
+    showPublishResult(false, [
+      '发布失败',
+      err.message,
+      err.badToken ? '请重新输入管理员密码后点"重试"。' : '请检查网络后点"重试"；书籍和音频仍在本机，不会丢失。',
+    ]);
+    if (err.badToken) publishTokenInput.focus();
   }
 }
 

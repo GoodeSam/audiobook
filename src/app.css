@@ -1572,3 +1572,35 @@ body.user-mode .chapter-cb {
 .library-delete {
   color: var(--danger);
 }
+
+/* Publish result view inside the publish modal */
+.publish-result {
+  text-align: center;
+  padding: 10px 0 4px;
+}
+
+.publish-result-icon {
+  font-size: 2.2rem;
+  margin-bottom: 6px;
+}
+
+.publish-result-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0 0 6px;
+}
+
+.publish-ok .publish-result-title {
+  color: #2e8b57;
+}
+
+.publish-fail .publish-result-title {
+  color: var(--danger);
+}
+
+.publish-result-line {
+  font-size: 0.9rem;
+  color: var(--text-secondary, #666);
+  margin: 3px 0;
+  word-break: break-all;
+}
