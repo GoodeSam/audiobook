@@ -498,3 +498,21 @@ Status comes from the live server catalog (fetched fresh on each library render 
 2. **间隔提示音。** 句组之间——上一句最后一遍英文和下一句第一遍英文之间——播放一声轻柔的 0.7 秒 880Hz "叮"，标记重复边界。新逐句模式和原有的按段落 EN→ZH→EN 模式都已加上。提示音是 4KB 内嵌 MP3，编码参数与 Edge TTS 输出完全一致（24kHz 单声道 48kbps CBR），拼接和按字节推算时长的时间线机制不受影响。
 3. **播放器高亮升级：** 逐句模式下，正在朗读的那个句子精确高亮；播放它的中文翻译时该英文句保持高亮（时间线新增 srcSentence 关联）；提示音期间保持段落高亮。
 新增 12 个单元测试（共 327 个，全部通过）：EN/ZH/EN+提示音的分段顺序、中文句子直读、markdown 清理、提示音解码缓存、逐句翻译分批。已部署 audiobook.tumei.online（线上验证模式列表与默认值）并推送 GitHub。
+
+\>> 长书上传后用户点击 Listen 半天没反应——按章节分割并显示下载进度；另：为什么最近翻译频繁 429（内容都很短）？ Fix slow Listen on long books (chapter splitting + download progress); explain/fix the frequent 429s.
+
+**Final report (EN):**
+
+1. **Download progress.** Tapping Listen now immediately opens a progress dialog "⬇️ 下载本章音频: <chapter>" with a streamed progress bar showing 已下载 X / Y MB and percent (fetch + ReadableStream against Content-Length; Cancel aborts the download). Once downloaded, audio is cached in IndexedDB — replays are instant.
+2. **Per-chapter download state.** User-mode chapter rows now show ✓ 已下载 (cached on this device), ☁️ 可听 + file size (tap to download — size comes from a new audioSize field in the publish manifest), or 文本 (no audio). Audio was already stored per chapter — only the tapped chapter downloads.
+3. **Auto-split long books.** Books whose source has no usable chapter structure (e.g. a whole book parsed as one chapter) are now split automatically at upload: any chapter over ~9k characters becomes balanced ~6k-char parts at paragraph boundaries, titled "Title (i/n)" (wired the previously unused content-splitter). Smaller chapters → shorter generation runs, smaller MP3s, faster user downloads.
+4. **Why the 429s, and the fix.** The sentence-repeat mode re-translated every sentence on every Generate Audio run — repeated tests of the same content burned the free API's per-IP quota. Added a persistent sentence-translation cache (IndexedDB): a sentence is translated once ever; regenerations hit the cache ("翻译缓存命中 N 句") and only new sentences reach the API.
+Verified live in a real browser: progress dialog with MB counter, player opens after download, badge flips to ✓ 已下载. 6 new tests (333 total, all pass). Deployed and pushed.
+
+**最终报告（中文）：**
+
+1. **下载进度可见。** 点 Listen 立即弹出"⬇️ 下载本章音频"进度框，流式显示"已下载 X / Y MB"和百分比（Cancel 可中止）。下载过的章节缓存在设备上，再次播放秒开。
+2. **每章下载状态。** 用户模式章节列表显示：✓ 已下载（本机已缓存）、☁️ 可听 + 文件大小（点击即下载；大小来自发布清单新增的 audioSize 字段）、文本（无音频）。音频本来就按章节存储——点哪章只下载哪章。
+3. **长书自动分章。** 源文件没有章节结构的书（比如整本解析成一章）上传时自动分割：超过约 9000 字符的章节按段落边界均衡切成约 6000 字符的部分，标题为"原标题 (i/n)"（接入了此前未使用的 content-splitter 模块）。章节变小 → 生成更快、MP3 更小、用户下载更快。
+4. **429 频繁的原因与修复。** 逐句模式此前每次 Generate Audio 都把全部句子重新翻译一遍——反复测试同样内容会重复消耗免费接口的 IP 配额。现已加入持久化的句子翻译缓存（IndexedDB）：每个句子一生只翻一次，重新生成时直接命中缓存（提示"翻译缓存命中 N 句"），只有新句子才请求接口。
+已在真实浏览器线上验证：进度框 MB 计数、下载完成后播放器打开、徽章变为 ✓ 已下载。新增 6 个测试（共 333 个，全部通过）。已部署并推送。
