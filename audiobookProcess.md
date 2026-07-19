@@ -466,3 +466,19 @@ Note: this is a static-hosting design — access codes control shelf visibility,
 1. **原因：** 发布用的书籍 ID 直接从书名生成，保留了 `(`、`)` 等字符；服务器出于安全只接受小写字母、数字、`-`、`_`，于是拒绝。
 2. **修复：** src/library-api.js 新增 `makePublishId()`——转小写、把其余字符段压成 `-`、去首尾、限 60 字符（"Self-Talk 6-16 (Organized) copy 2" → `self-talk-6-16-organized-copy-2`）。完全没有拉丁字母的书名（如纯中文）用稳定的 `book-<哈希>` ID，重复发布同一本书仍是覆盖而非新建。🚀 发布到网站和 Publish ZIP 备用通道都已换用；本机书库 ID 不受影响。
 新增 4 个单元测试（共 320 个，全部通过）。已部署 audiobook.tumei.online 并推送 GitHub。这次"发布失败"弹窗准确显示了服务器返回的原因——反馈机制正是靠它定位到了这个 bug。
+
+\>> 发布成功了。对于管理员的界面，已经发布成功的内容，在界面上应该有所标识。 Mark already-published content in the admin interface.
+
+**Final report (EN):** The admin interface now shows publish status everywhere it matters.
+
+1. **My Library badges:** every locally generated book carries a pill badge — green "✅ 已发布" (hover shows when the site version was last updated, and the meta line shows 网站版 date) or grey "未发布".
+2. **Sidebar publish button:** when the open book is already on the site, the green 🚀 button turns blue and reads "✅ 已发布 · 点此更新网站版本", with the publish date and audio count in its tooltip. Unpublished books keep the green 🚀 发布到网站.
+3. **Overwrite awareness:** the publish dialog notes "已于 <时间> 发布过，本次发布将覆盖网站版本" when republishing; after a successful publish all indicators refresh immediately. Books opened from the shelf (already-remote) are matched by their remote id, local books by their sanitized publish id.
+Status comes from the live server catalog (fetched fresh on each library render / book open; falls back to last known state offline). Verified live in the browser: an already-published book shows the blue updated-state button with correct timestamp. 320 tests pass; deployed and pushed.
+
+**最终报告（中文）：** 管理员界面现在处处可见发布状态。
+
+1. **My Library 徽章：** 每本本地生成的书都带状态胶囊——绿色"✅ 已发布"（悬停可见网站版本更新时间，信息行也显示"网站版 <时间>"）或灰色"未发布"。
+2. **侧栏发布按钮：** 当前打开的书如果已在网站上，绿色 🚀 按钮变为蓝色"✅ 已发布 · 点此更新网站版本"，悬停提示发布时间和音频数；未发布的书保持绿色"🚀 发布到网站"。
+3. **覆盖提醒：** 重复发布时弹窗会注明"已于 <时间> 发布过，本次发布将覆盖网站版本"；发布成功后所有标识立即刷新。从书架打开的（已在网站上的）书按远程 ID 匹配，本地书按清理后的发布 ID 匹配。
+状态实时取自服务器目录（每次渲染书库/打开书都拉取最新，离线时沿用上次已知状态）。已在浏览器线上验证：打开已发布的书显示蓝色更新按钮和正确的时间戳。320 个测试通过；已部署并推送。
