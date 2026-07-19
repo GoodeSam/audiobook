@@ -3,3 +3,4 @@ dist
 .DS_Store
 访问码管理.xlsx
 deploy/admin-password.txt
+__pycache__
