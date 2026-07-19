@@ -2148,6 +2148,11 @@ async function openRemoteBook(entry) {
 
 let currentValidCodes = [];
 
+// .progress-overlay is display:none until the `visible` class is added —
+// toggling [hidden] alone never shows these modals
+function showModal(el) { el.hidden = false; el.classList.add('visible'); }
+function hideModal(el) { el.hidden = true; el.classList.remove('visible'); }
+
 /** Ask for / remember the admin password; returns '' if the field is empty. */
 function readTokenField(input) {
   const token = (input.value || '').trim();
@@ -2174,7 +2179,7 @@ function openPublishModal() {
   btnPublishConfirm.disabled = false;
   btnPublishConfirm.hidden = false;
   btnPublishCancel.textContent = '取消';
-  publishModal.hidden = false;
+  showModal(publishModal);
   (getSavedToken() ? publishAccessInput : publishTokenInput).focus();
 }
 
@@ -2249,7 +2254,7 @@ async function doPublishToSite() {
 
 btnPublishSite.addEventListener('click', openPublishModal);
 btnPublishConfirm.addEventListener('click', doPublishToSite);
-btnPublishCancel.addEventListener('click', () => { publishModal.hidden = true; });
+btnPublishCancel.addEventListener('click', () => { hideModal(publishModal); });
 publishAccessInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doPublishToSite(); });
 publishTokenInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doPublishToSite(); });
 
@@ -2265,7 +2270,7 @@ function openFieldModal({ title, hint, value, onSave }) {
   fieldModalTokenRow.hidden = !!getSavedToken();
   fieldModalToken.value = '';
   btnFieldSave.disabled = false;
-  fieldModal.hidden = false;
+  showModal(fieldModal);
   fieldModalInput.focus();
 
   btnFieldSave.onclick = async () => {
@@ -2280,7 +2285,7 @@ function openFieldModal({ title, hint, value, onSave }) {
     fieldModalStatus.textContent = '正在保存…';
     try {
       await onSave(fieldModalInput.value, token);
-      fieldModal.hidden = true;
+      hideModal(fieldModal);
       renderShelf();
     } catch (err) {
       if (err.badToken) {
@@ -2294,7 +2299,7 @@ function openFieldModal({ title, hint, value, onSave }) {
   };
 }
 
-btnFieldCancel.addEventListener('click', () => { fieldModal.hidden = true; });
+btnFieldCancel.addEventListener('click', () => { hideModal(fieldModal); });
 
 function openAccessEditor(entry) {
   openFieldModal({

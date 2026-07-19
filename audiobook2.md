@@ -150,3 +150,7 @@ Ran 2 shell commands
 
 对于音频中英语和汉语的翻译，可以是逐句，也可以是逐段进行翻译
 
+
+
+![](./assets/images/clipboard-1784458985208-jtb6-1784458985210-7mar87sh.png)
+

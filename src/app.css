@@ -1604,3 +1604,9 @@ body.user-mode .chapter-cb {
   margin: 3px 0;
   word-break: break-all;
 }
+
+/* These set their own display, which would defeat the [hidden] attribute */
+.modal-label[hidden],
+.shelf-admin-tools[hidden] {
+  display: none;
+}
