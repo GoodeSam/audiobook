@@ -482,3 +482,19 @@ Status comes from the live server catalog (fetched fresh on each library render 
 2. **侧栏发布按钮：** 当前打开的书如果已在网站上，绿色 🚀 按钮变为蓝色"✅ 已发布 · 点此更新网站版本"，悬停提示发布时间和音频数；未发布的书保持绿色"🚀 发布到网站"。
 3. **覆盖提醒：** 重复发布时弹窗会注明"已于 <时间> 发布过，本次发布将覆盖网站版本"；发布成功后所有标识立即刷新。从书架打开的（已在网站上的）书按远程 ID 匹配，本地书按清理后的发布 ID 匹配。
 状态实时取自服务器目录（每次渲染书库/打开书都拉取最新，离线时沿用上次已知状态）。已在浏览器线上验证：打开已发布的书显示蓝色更新按钮和正确的时间戳。320 个测试通过；已部署并推送。
+
+\>> 增加 repeat each sentence 的选项，并将 EN ZH EN (repeat each sentence) 设为默认选择；在 EN ZH EN 模式中上一句的最后一次英语和下一句开始的英语音频之间有一个间隔提示音。 Add a repeat-each-sentence audio mode (default), with a separator chime between repeat groups.
+
+**Final report (EN):**
+
+1. **New audio mode "EN→ZH→EN (repeat each sentence)"** — now the default. Every English sentence is spoken as EN → its Chinese translation → EN again. The Chinese comes from per-sentence machine translation done automatically at generation time (chunked 25/request with the same 429-backoff), so the mode works even on untranslated chapters; already-Chinese sentences are spoken once. Progress shows "正在逐句翻译 N / M 句…".
+2. **Separator chime.** A soft 0.7s 880Hz "ding" plays between repeat groups — between the closing EN of one sentence and the opening EN of the next — so listeners can tell the repetition boundary. Applied to both the new sentence mode and the existing paragraph EN→ZH→EN mode. The chime is a 4KB embedded MP3 encoded exactly like Edge TTS output (24kHz mono 48kbps CBR), keeping blob concatenation and the byte-based timeline math valid.
+3. **Player highlighting upgraded** for the new mode: the exact sentence being spoken is highlighted during its English readings, and stays highlighted while its Chinese translation plays (matched via a srcSentence link in the timeline); the chime keeps the paragraph highlight.
+12 new unit tests (327 total, all pass): segment ordering EN/ZH/EN + beep placement, Chinese-sentence passthrough, markdown stripping, beep blob decode/cache, translateTexts chunking. Deployed to audiobook.tumei.online (verified live: mode list + default) and pushed to GitHub.
+
+**最终报告（中文）：**
+
+1. **新音频模式"EN→ZH→EN (repeat each sentence)"并设为默认。** 每个英文句子按"英文 → 中文翻译 → 英文"朗读。中文来自生成时自动进行的逐句机器翻译（每 25 句一批，带 429 限流退避），因此未翻译的章节也能直接用此模式生成；本身是中文的句子只读一遍。进度框显示"正在逐句翻译 N / M 句…"。
+2. **间隔提示音。** 句组之间——上一句最后一遍英文和下一句第一遍英文之间——播放一声轻柔的 0.7 秒 880Hz "叮"，标记重复边界。新逐句模式和原有的按段落 EN→ZH→EN 模式都已加上。提示音是 4KB 内嵌 MP3，编码参数与 Edge TTS 输出完全一致（24kHz 单声道 48kbps CBR），拼接和按字节推算时长的时间线机制不受影响。
+3. **播放器高亮升级：** 逐句模式下，正在朗读的那个句子精确高亮；播放它的中文翻译时该英文句保持高亮（时间线新增 srcSentence 关联）；提示音期间保持段落高亮。
+新增 12 个单元测试（共 327 个，全部通过）：EN/ZH/EN+提示音的分段顺序、中文句子直读、markdown 清理、提示音解码缓存、逐句翻译分批。已部署 audiobook.tumei.online（线上验证模式列表与默认值）并推送 GitHub。
