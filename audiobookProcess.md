@@ -436,3 +436,19 @@ Note: this is a static-hosting design — access codes control shelf visibility,
 1. **发布结果直接显示在弹窗里。** 点"发布"后不再是悄悄关窗+角落提示：成功时弹窗切换为结果页——大号 ✅"发布成功！"、书名/章节数/音频数、可见范围、"用户刷新书架即可看到"，看清后手动点"关闭"；失败时显示 ❌ 和具体原因，表单保留、按钮变为"重试"；密码错误会自动清除已存密码并让你重输，并提示书籍仍在本机不会丢失。
 2. **临时开放全部书籍（按要求）。** 目前跳过按书授权：所有登录用户的书架显示全部已发布书籍；发布弹窗隐藏访问码栏（发布默认公开）；服务器上现有书籍已全部设为 public。权限机制（API、✏️ 权限编辑、目录中的访问码列表）全部保留并加了注释，日后恢复只需一行改回 visibleBooks() 并取消隐藏访问码栏。
 316 个测试通过。已部署 audiobook.tumei.online 并推送 GitHub。
+
+\>> 我点侧栏绿色的 🚀 发布到网站 后没有任何反应，没有让我输入密码的界面。 Fix: clicking Publish-to-Site did nothing — no password dialog appeared.
+
+**Final report (EN):** Found and fixed — the publish dialog could never display.
+
+1. **Root cause:** the dialog reused the app's `.progress-overlay` CSS, which is `display:none` until a `visible` class is added; the code only toggled the `hidden` attribute, which that CSS silently overrides. The click handler ran, but nothing could ever appear on screen.
+2. **Fix:** new `showModal()/hideModal()` helpers toggle both the attribute and the `visible` class for the publish dialog and the access/codes editor dialog. The same CSS pitfall also kept the (supposedly hidden) access-code field visible inside the dialog — added explicit `[hidden]` overrides for `.modal-label` and `.shelf-admin-tools`.
+3. **Verified in a real browser** on the live site: clicking 🚀 发布到网站 now opens the dialog (book summary + admin password field only, since access control is currently open to everyone), and 取消 closes it. Screenshot-confirmed. Also removed a leftover empty `_test` folder from the server library.
+316 tests pass. Deployed to audiobook.tumei.online and pushed to GitHub.
+
+**最终报告（中文）：** 已定位并修复——发布弹窗此前根本无法显示。
+
+1. **根本原因：** 弹窗复用了应用的 `.progress-overlay` 样式，该样式默认 `display:none`，必须加 `visible` class 才显示；而代码只切换了 `hidden` 属性——被 CSS 覆盖后毫无效果。点击后代码其实在执行，只是界面上永远看不到。
+2. **修复：** 新增 `showModal()/hideModal()` 辅助函数，同时切换属性和 `visible` class（发布弹窗和权限/访问码编辑弹窗都已接入）。同一 CSS 陷阱还导致弹窗里本应隐藏的访问码栏仍然可见——已为 `.modal-label`、`.shelf-admin-tools` 补上 `[hidden]` 覆盖规则。
+3. **已在真实浏览器里对线上站点验证：** 点 🚀 发布到网站 弹窗正常出现（只显示书籍信息 + 管理员密码栏，因为当前权限全开放），取消可正常关闭，截图确认。顺带清理了服务器内容库里遗留的空 `_test` 目录。
+316 个测试通过。已部署 audiobook.tumei.online 并推送 GitHub。
