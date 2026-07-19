@@ -11,6 +11,7 @@
  */
 
 import { splitParagraphs, isSkipParagraph, parseHeading } from './paragraph-utils.js';
+import { googleTranslateBatch } from './google-translator.js';
 
 const MS_AUTH_URL = 'https://edge.microsoft.com/translate/auth';
 const MS_TRANSLATE_URL = 'https://api.cognitive.microsofttranslator.com/translate';
@@ -118,6 +119,16 @@ export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}
       });
     }
 
+    // Microsoft rate-limited us — switch to Google's free endpoint for this
+    // batch instead of waiting out the (often long) limit window.
+    if (resp.status === 429 && opts.noGoogleFallback !== true) {
+      try {
+        const result = await googleTranslateBatch(texts, from, to, opts.googleFetchFn || fetchFn);
+        if (opts.onFallback) opts.onFallback('google');
+        return result;
+      } catch { /* Google unreachable — fall through to normal MS retries */ }
+    }
+
     // Retry on 401 (token expired), 429 (rate limit), 5xx (server error)
     const retryable = resp.status === 401 || resp.status === 429 || resp.status >= 500;
     if (!retryable || attempt === maxRetries) {
@@ -155,11 +166,11 @@ export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}
  * @returns {Promise<string[]>} translations, same order as texts.
  */
 export async function translateTexts(texts, from, to, opts = {}) {
-  const { fetchFn = fetch, onWait, onChunk } = opts;
+  const { fetchFn = fetch, onWait, onChunk, onFallback } = opts;
   const out = [];
   for (let i = 0; i < texts.length; i += BATCH_SIZE) {
     if (i > 0) await new Promise(r => setTimeout(r, BATCH_INTERVAL_MS));
-    const chunk = await translateBatch(texts.slice(i, i + BATCH_SIZE), from, to, fetchFn, { onWait });
+    const chunk = await translateBatch(texts.slice(i, i + BATCH_SIZE), from, to, fetchFn, { onWait, onFallback });
     out.push(...chunk);
     if (onChunk) onChunk(Math.min(i + BATCH_SIZE, texts.length), texts.length);
   }
@@ -237,6 +248,9 @@ export async function translateChapter(markdown, from, to, options = {}) {
     const results = await translateBatch(batchTexts, from, to, fetchFn, {
       onWait: (seconds, attempt) => {
         if (onStatus) onStatus(`⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 进度不会丢失`);
+      },
+      onFallback: () => {
+        if (onStatus) onStatus('⚡ 微软翻译限流 — 已自动切换 Google 翻译继续');
       },
     });
     for (let r = 0; r < results.length; r++) {

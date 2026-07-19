@@ -946,6 +946,9 @@ function sentenceModeTranslator() {
         onWait: (seconds, attempt) => {
           progressText.textContent = `⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 进度不会丢失`;
         },
+        onFallback: () => {
+          progressText.textContent = '⚡ 微软翻译限流 — 已自动切换 Google 翻译继续';
+        },
         onChunk: (done, total) => {
           progressText.textContent = `正在逐句翻译 ${done} / ${total} 句…`;
         },

@@ -134,8 +134,24 @@ describe('translateText', () => {
     ]);
 
     await expect(
-      translateBatch(['test'], 'en', 'zh-Hans', fetchFn, { maxRetries: 0 })
+      translateBatch(['test'], 'en', 'zh-Hans', fetchFn, { maxRetries: 0, noGoogleFallback: true })
     ).rejects.toThrow('429');
+  });
+
+  it('falls back to Google when Microsoft returns 429', async () => {
+    const fetchFn = mockFetch([
+      okTextResponse('token'),
+      errorResponse(429),
+    ]);
+    const googleFetchFn = async () => ({ ok: true, json: async () => ['你好'] });
+
+    const fallbacks = [];
+    const out = await translateBatch(['Hello'], 'en', 'zh-Hans', fetchFn, {
+      googleFetchFn,
+      onFallback: (provider) => fallbacks.push(provider),
+    });
+    expect(out).toEqual(['你好']);
+    expect(fallbacks).toEqual(['google']);
   });
 
   it('retries 429 with backoff and eventually succeeds', async () => {
@@ -150,6 +166,7 @@ describe('translateText', () => {
     const waits = [];
     const results = await translateBatch(['Hello'], 'en', 'zh-Hans', fetchFn, {
       rateLimitDelays: [1, 1, 1],
+      noGoogleFallback: true,
       onWait: (seconds, attempt) => waits.push(attempt),
     });
 
@@ -173,7 +190,7 @@ describe('translateText', () => {
 
     const start = Date.now();
     // Default table would wait 5s — the tiny Retry-After must win
-    const results = await translateBatch(['x'], 'en', 'zh-Hans', fetchFn);
+    const results = await translateBatch(['x'], 'en', 'zh-Hans', fetchFn, { noGoogleFallback: true });
     expect(results).toEqual(['ok']);
     expect(Date.now() - start).toBeLessThan(2000);
   });
