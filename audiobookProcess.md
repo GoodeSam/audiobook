@@ -532,3 +532,19 @@ Verified live in a real browser: progress dialog with MB counter, player opens a
 2. **自动切换**：微软返回 429 时，同一批句子立即改用 Google 翻译，成功则无缝继续（进度框显示"⚡ 微软翻译限流 — 已自动切换 Google 翻译继续"）；若 Google 也不可达则回到微软的退避重试。段落翻译、逐句模式全部生效；翻译缓存对两个来源的结果一视同仁。
 3. 说明：Google 需要管理员电脑的网络可达（翻译只在管理员端进行，大陆用户端不受影响）。
 新增 11 个测试（共 341 个，全部通过）。已部署并推送 GitHub。（后台仍在探测微软限流，部署时仍为 429——但有了自动切换，这不再阻塞任何操作。）
+
+\>> 这个软件在客户端可以改成多一种显示模式：在播放的时候，只显示播放的这一句和前后一句的字幕，然后手机端界面用全屏显示，然后字体就可以做到更大，方便阅读 Add a client-side subtitle display mode: while playing, show only the current sentence plus one before and one after, fullscreen on mobile with larger type for easier reading.
+
+**Final report (EN):** The player now has a subtitle-style reading mode, toggled from its header.
+
+1. **New toggle button** (💬) in the player header switches between the existing full-chapter scroll view and a new "subtitle" view. The choice is remembered in localStorage across sessions and chapters.
+2. **Subtitle view** shows exactly three lines, centered in the already-fullscreen mobile player: the previous sentence (dimmed, smaller), the sentence currently being spoken (bold, large — 1.85rem, 2.2rem on phones), and the next sentence (dimmed, smaller). It stays in sync with playback via the existing audio timeline, and the sentence flow continues seamlessly across paragraph breaks (a new flat, chapter-wide sentence index drives the prev/next lookup instead of the old per-paragraph indexing).
+3. Reused the existing highlight/timeline logic entirely — the new mode just reads the same "currently speaking" sentence and renders it three-lines-at-a-time instead of highlighting it inside the full scrolling text; toggling back to full-text mode keeps working exactly as before.
+Verified live in the browser (mobile viewport): toggle switches modes correctly, the first sentence pre-fills on chapter open, mid-chapter and paragraph-crossing sentences show correct prev/current/next text, and the last sentence of a chapter correctly leaves "next" blank. 341 tests pass (no new test file — this is UI/DOM behavior, verified live). Deployed to audiobook.tumei.online and pushed to GitHub.
+
+**最终报告（中文）：** 播放器新增字幕式阅读模式，从页头一键切换。
+
+1. **新增切换按钮**（💬）位于播放器页头，可在原有的整章滚动视图和新的"字幕"视图之间切换。选择会存入 localStorage，跨会话、跨章节保持。
+2. **字幕视图** 在已经全屏的手机播放器中央只显示三行：上一句（变暗、字号较小）、正在朗读的句子（加粗放大——1.85rem，手机上 2.2rem）、下一句（变暗、字号较小）。与现有的音频时间线保持同步，且跨段落时句子流转仍然连续（新增了一个横跨全章、不分段落的句子索引，用它来查找上一句/下一句，替代原来按段落内索引的做法）。
+3. 完全复用了原有的高亮/时间线逻辑——新模式只是读取同一个"正在朗读"的句子，把它渲染成三行而不是在整段滚动文字里高亮；切回整文模式行为不受影响。
+已在浏览器（手机视口）线上验证：切换按钮正确换视图，打开章节时预填第一句，章节中段及跨段落的句子前后句显示正确，章节最后一句"下一句"正确留空。341 个测试通过（无需新增测试文件——这是 UI/DOM 行为，已线上验证）。已部署 audiobook.tumei.online 并推送 GitHub。
