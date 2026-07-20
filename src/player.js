@@ -5,6 +5,11 @@
  * text is never rendered), highlights the paragraph and — for English
  * segments — the exact sentence being spoken, synced to audio time via the
  * per-chapter timeline generated alongside the MP3 (see audio-timeline.js).
+ *
+ * Two view modes, toggled by the user and remembered across sessions:
+ *  - "full": the whole chapter text, auto-scrolled to the active sentence.
+ *  - "subtitle": only the current sentence plus its neighbors, in large
+ *    type — a focused, subtitle-style reading mode for mobile.
  */
 
 import {
@@ -16,6 +21,7 @@ import { splitIntoParagraphs, stripMarkdown, splitIntoSentences } from './edge-t
 
 const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5];
 const PROGRESS_SAVE_INTERVAL_MS = 5000;
+const VIEW_MODE_KEY = 'audiobook-player-view-mode';
 
 export class Player {
   /**
@@ -44,8 +50,11 @@ export class Player {
     this._autoScrolling = false;
     this._lastManualScroll = 0;
     this._seeking = false;
+    this._flatSentences = [];
+    this._viewMode = localStorage.getItem(VIEW_MODE_KEY) === 'subtitle' ? 'subtitle' : 'full';
 
     this._bindEvents();
+    this._applyViewMode();
   }
 
   _bindEvents() {
@@ -58,6 +67,7 @@ export class Player {
     el.btnNext.addEventListener('click', () => this.onRequestChapter(1));
     el.btnRate.addEventListener('click', () => this._cycleRate());
     el.btnClose.addEventListener('click', () => this.close());
+    el.btnMode.addEventListener('click', () => this._toggleViewMode());
 
     el.seek.addEventListener('input', () => {
       this._seeking = true;
@@ -123,6 +133,7 @@ export class Player {
     this.el.bookTitle.textContent = bookTitle;
     this.el.chapterTitle.textContent = chapterTitle;
     this._renderText(originalText);
+    if (this._viewMode === 'subtitle') this._updateSubtitleView(this._flatSentences[0] || null);
 
     this._url = URL.createObjectURL(blob);
     this.audio.src = this._url;
@@ -147,6 +158,7 @@ export class Player {
   _renderText(originalText) {
     const container = this.el.text;
     container.innerHTML = '';
+    this._flatSentences = [];
     const paras = splitIntoParagraphs(originalText || '');
     for (let i = 0; i < paras.length; i++) {
       const clean = stripMarkdown(paras[i]);
@@ -160,7 +172,9 @@ export class Player {
           const span = document.createElement('span');
           span.className = 'player-sentence';
           span.dataset.sentence = s;
+          span.dataset.flatIndex = this._flatSentences.length;
           span.textContent = sentences[s];
+          this._flatSentences.push(span);
           p.appendChild(span);
           p.appendChild(document.createTextNode(' '));
         }
@@ -293,7 +307,15 @@ export class Player {
         target = span;
       }
     }
-    this._autoScrollTo(target);
+
+    if (this._viewMode === 'subtitle') {
+      const subtitleSpan = target.classList.contains('player-sentence')
+        ? target
+        : target.querySelector('.player-sentence');
+      this._updateSubtitleView(subtitleSpan);
+    } else {
+      this._autoScrollTo(target);
+    }
   }
 
   _autoScrollTo(el) {
@@ -301,6 +323,51 @@ export class Player {
     this._autoScrolling = true;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setTimeout(() => { this._autoScrolling = false; }, 700);
+  }
+
+  // ── Subtitle view (current sentence ± neighbors, large type) ──
+
+  _toggleViewMode() {
+    this._viewMode = this._viewMode === 'subtitle' ? 'full' : 'subtitle';
+    localStorage.setItem(VIEW_MODE_KEY, this._viewMode);
+    this._applyViewMode();
+  }
+
+  _applyViewMode() {
+    const isSubtitle = this._viewMode === 'subtitle';
+    this.el.screen.classList.toggle('subtitle-mode', isSubtitle);
+    this.el.btnMode.classList.toggle('active', isSubtitle);
+    this.el.btnMode.setAttribute('aria-pressed', String(isSubtitle));
+    if (isSubtitle) {
+      const current = this._flatSentences[this._activeFlatIndex()] || this._flatSentences[0] || null;
+      this._updateSubtitleView(current);
+    }
+  }
+
+  /** Index into _flatSentences of the currently-speaking sentence, or -1. */
+  _activeFlatIndex() {
+    const speaking = this.el.text.querySelector('.player-sentence.speaking');
+    return speaking && speaking.dataset.flatIndex !== undefined ? parseInt(speaking.dataset.flatIndex, 10) : -1;
+  }
+
+  /**
+   * Show the current sentence plus its neighbors, ignoring paragraph
+   * boundaries so the reading flow stays continuous across paragraph breaks.
+   */
+  _updateSubtitleView(currentSpan) {
+    const { subtitlePrev, subtitleCurrent, subtitleNext } = this.el;
+    if (!currentSpan) {
+      subtitlePrev.textContent = '';
+      subtitleCurrent.textContent = '';
+      subtitleNext.textContent = '';
+      return;
+    }
+    const idx = currentSpan.dataset.flatIndex !== undefined ? parseInt(currentSpan.dataset.flatIndex, 10) : -1;
+    const prev = idx > 0 ? this._flatSentences[idx - 1] : null;
+    const next = idx >= 0 && idx < this._flatSentences.length - 1 ? this._flatSentences[idx + 1] : null;
+    subtitlePrev.textContent = prev ? prev.textContent : '';
+    subtitleCurrent.textContent = currentSpan.textContent;
+    subtitleNext.textContent = next ? next.textContent : '';
   }
 
   // ── Progress persistence ──

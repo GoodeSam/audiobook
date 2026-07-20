@@ -1355,6 +1355,69 @@ body {
   }
 }
 
+/* ── Subtitle view — only the current sentence + neighbors, large type ── */
+
+.player-icon-btn.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.player-subtitle {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  padding: 2rem 1.5rem;
+  max-width: 46rem;
+  margin: 0 auto;
+  width: 100%;
+  text-align: center;
+  overflow: hidden;
+}
+
+#player-screen.subtitle-mode .player-text {
+  display: none;
+}
+
+#player-screen.subtitle-mode .player-subtitle {
+  display: flex;
+}
+
+.subtitle-line {
+  line-height: 1.6;
+  transition: opacity 0.25s, color 0.25s;
+}
+
+.subtitle-prev,
+.subtitle-next {
+  font-size: 1.15rem;
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+.subtitle-current {
+  font-size: 1.85rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+@media (max-width: 480px) {
+  .player-subtitle {
+    padding: 1.5rem 1.25rem;
+    gap: 1.5rem;
+  }
+  .subtitle-current {
+    font-size: 2.2rem;
+  }
+  .subtitle-prev,
+  .subtitle-next {
+    font-size: 1.25rem;
+  }
+}
+
 /* The hidden attribute must win over display:flex rules */
 .user-add-row[hidden],
 .player-drawer[hidden],
