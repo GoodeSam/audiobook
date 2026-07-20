@@ -1418,6 +1418,24 @@ body {
   }
 }
 
+/* ── Fullscreen reading — hide header + controls, text/subtitle fill the screen.
+   Tap the text area to bring the chrome back. ── */
+
+#player-screen.immersive .player-header,
+#player-screen.immersive .player-controls {
+  display: none;
+}
+
+#player-screen.immersive .player-text {
+  padding-top: calc(1.25rem + env(safe-area-inset-top));
+  padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
+}
+
+#player-screen.immersive .player-subtitle {
+  padding-top: calc(2rem + env(safe-area-inset-top));
+  padding-bottom: calc(2rem + env(safe-area-inset-bottom));
+}
+
 /* The hidden attribute must win over display:flex rules */
 .user-add-row[hidden],
 .player-drawer[hidden],

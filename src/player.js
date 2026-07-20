@@ -10,6 +10,9 @@
  *  - "full": the whole chapter text, auto-scrolled to the active sentence.
  *  - "subtitle": only the current sentence plus its neighbors, in large
  *    type — a focused, subtitle-style reading mode for mobile.
+ * A separate, orthogonal "immersive" toggle hides the header and playback
+ * controls so the text fills the screen; tapping the text area reveals
+ * them again.
  */
 
 import {
@@ -22,6 +25,7 @@ import { splitIntoParagraphs, stripMarkdown, splitIntoSentences } from './edge-t
 const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5];
 const PROGRESS_SAVE_INTERVAL_MS = 5000;
 const VIEW_MODE_KEY = 'audiobook-player-view-mode';
+const IMMERSIVE_KEY = 'audiobook-player-immersive';
 
 export class Player {
   /**
@@ -52,9 +56,11 @@ export class Player {
     this._seeking = false;
     this._flatSentences = [];
     this._viewMode = localStorage.getItem(VIEW_MODE_KEY) === 'subtitle' ? 'subtitle' : 'full';
+    this._immersive = localStorage.getItem(IMMERSIVE_KEY) === '1';
 
     this._bindEvents();
     this._applyViewMode();
+    this._applyImmersive();
   }
 
   _bindEvents() {
@@ -68,6 +74,12 @@ export class Player {
     el.btnRate.addEventListener('click', () => this._cycleRate());
     el.btnClose.addEventListener('click', () => this.close());
     el.btnMode.addEventListener('click', () => this._toggleViewMode());
+    el.btnFullscreen.addEventListener('click', () => this._toggleImmersive());
+
+    // Tapping the reading area while in fullscreen brings the controls back.
+    const exitImmersiveOnTap = () => { if (this._immersive) this._toggleImmersive(); };
+    el.text.addEventListener('click', exitImmersiveOnTap);
+    el.subtitleContainer.addEventListener('click', exitImmersiveOnTap);
 
     el.seek.addEventListener('input', () => {
       this._seeking = true;
@@ -323,6 +335,20 @@ export class Player {
     this._autoScrolling = true;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setTimeout(() => { this._autoScrolling = false; }, 700);
+  }
+
+  // ── Fullscreen reading (hide header + controls, maximize text) ──
+
+  _toggleImmersive() {
+    this._immersive = !this._immersive;
+    localStorage.setItem(IMMERSIVE_KEY, this._immersive ? '1' : '0');
+    this._applyImmersive();
+  }
+
+  _applyImmersive() {
+    this.el.screen.classList.toggle('immersive', this._immersive);
+    this.el.btnFullscreen.classList.toggle('active', this._immersive);
+    this.el.btnFullscreen.setAttribute('aria-pressed', String(this._immersive));
   }
 
   // ── Subtitle view (current sentence ± neighbors, large type) ──
