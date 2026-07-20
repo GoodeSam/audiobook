@@ -548,3 +548,19 @@ Verified live in the browser (mobile viewport): toggle switches modes correctly,
 2. **字幕视图** 在已经全屏的手机播放器中央只显示三行：上一句（变暗、字号较小）、正在朗读的句子（加粗放大——1.85rem，手机上 2.2rem）、下一句（变暗、字号较小）。与现有的音频时间线保持同步，且跨段落时句子流转仍然连续（新增了一个横跨全章、不分段落的句子索引，用它来查找上一句/下一句，替代原来按段落内索引的做法）。
 3. 完全复用了原有的高亮/时间线逻辑——新模式只是读取同一个"正在朗读"的句子，把它渲染成三行而不是在整段滚动文字里高亮；切回整文模式行为不受影响。
 已在浏览器（手机视口）线上验证：切换按钮正确换视图，打开章节时预填第一句，章节中段及跨段落的句子前后句显示正确，章节最后一句"下一句"正确留空。341 个测试通过（无需新增测试文件——这是 UI/DOM 行为，已线上验证）。已部署 audiobook.tumei.online 并推送 GitHub。
+
+\>> 这个功能很不错，在阅读界面还应该有全屏模式，让快速播放等界面都消失，最大程度展示文本 Add a true fullscreen mode to the reading view — hide the header, playback controls, etc. so the text is shown to the maximum extent.
+
+**Final report (EN):** The player now has a fullscreen reading mode, orthogonal to the full-text/subtitle toggle added earlier.
+
+1. **New ⛶ toggle button** in the player header. Tapping it hides the header (back/mode/chapters buttons, book/chapter title) and the bottom controls bar (seek, play, speed, prev/next), so whichever text view is active — full chapter or subtitle — expands via flexbox to fill the entire screen.
+2. **Tap-to-restore.** Since the controls are gone, tapping anywhere in the reading area brings them back (the same tap toggles nothing when controls are already visible, so it never interferes with normal reading/scrolling). This is the same convention used by video players and e-readers.
+3. Safe-area insets (notch/home-indicator) are preserved on the text container itself once the header/controls that normally carried that padding are hidden. Preference persists in localStorage, same pattern as the subtitle-view toggle, and works independently of it — any combination of full/subtitle × fullscreen/normal is supported.
+Verified live in the browser: entering fullscreen from both full-text and subtitle view correctly hides all chrome and the text re-flows to fill the screen; tapping the text restores the header and controls in both modes. 341 tests pass; deployed to audiobook.tumei.online and pushed to GitHub.
+
+**最终报告（中文）：** 播放器新增真正的全屏阅读模式，与此前的整文/字幕切换相互独立。
+
+1. **新增 ⛶ 切换按钮**，位于播放器页头。点击后隐藏页头（返回/字幕模式/章节列表按钮、书名章节名）和底部控制栏（进度条、播放、倍速、上下章），无论当前是整文视图还是字幕视图，文字区域都会通过 flex 布局自动撑满整个屏幕。
+2. **点按恢复。** 控制栏消失后，点按阅读区域任意位置即可恢复（控制栏已显示时点击不会有任何多余动作，不干扰正常阅读/滚动），与视频播放器、电子书阅读器的通用交互一致。
+3. 隐藏页头/控制栏后，原本由它们承担的安全区域内边距（刘海屏/home 指示条）改为直接加在文字容器上，避免贴边。切换状态存入 localStorage，与字幕视图开关同样的做法，且两者相互独立——整文/字幕与全屏/普通可任意组合。
+已在浏览器线上验证：整文视图和字幕视图下点击全屏都能正确隐藏所有界面元素、文字重新撑满屏幕；两种模式下点按文字都能恢复页头和控制栏。341 个测试通过；已部署 audiobook.tumei.online 并推送 GitHub。
