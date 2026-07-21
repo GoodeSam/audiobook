@@ -694,3 +694,27 @@ Verified live in the browser: entering fullscreen from both full-text and subtit
 5. **章节分割器里一个悄悄违反自身约定的问题（Medium），是之前就有的：** `splitIntoParts` 承诺"10 章以上至少产出 minParts 份"，但按章节分割时会先丢弃空章节，之后才检查这个承诺是否满足——所以 12 章里有 4 章是空的话，可能悄悄只产出 8 份。补上了缺失的数量检查，并新增了一条回归测试（确认：旧代码下正好产出 8 份、测试失败；修复后测试通过）。
 6. **一个 Low 级别问题**——一个确实构建了却从没被读取过的 `summary` 字符串——现在会通过 `console.warn` 打印出来，而不是白白扔掉。
 355 个测试通过（新增 1 个回归测试）。已部署 audiobook.tumei.online（前端 + 两个后端脚本）并推送 GitHub。
+
+\>> 对用户访问audiobook.tumei.online页面的展示进行优化，尤其是是手机端，书名都不能完全展示出来 / 对管理员访问的页面也进行优化，目前访问页面比较混乱 Optimize the user-facing page display, especially on mobile — book titles were being cut off. Also optimize the admin landing page, which is currently cluttered.
+
+**Final report (EN):** Fixed the title truncation (root cause: single-line ellipsis, not a mobile-specific bug) and reorganized the admin landing page into clearly separated sections; found and fixed a third clutter issue live while verifying.
+
+1. **Why titles were cut off.** The shelf/library card (`.library-item`) squeezed a bold title and 1–3 action buttons onto one row, with the title forced to `white-space: nowrap` + ellipsis. Since the whole app's content column is capped at `max-width: 480px` everywhere (not just on phones), this wasn't strictly a "mobile" bug — but it's obviously worst on an actual phone screen, where there's no extra desktop whitespace to compensate. A title like "Football Academy: Boys United" reliably became "Football Academy: Boys Unit…", and in admin mode (3 buttons instead of 1) it was even worse. Confirmed live on the production site before touching anything.
+2. **Fix:** rebuilt the card as a stack — title on top (now wraps normally, capped at 3 lines so one absurd title can't blow out the card), then a full-width row of action buttons below instead of squeezed alongside. Verified directly on the live site with real long titles ("Animal Life Cycles (Rachel Bladon) (z-library.sk, 1lib.sk, z-lib.sk)"): now wraps completely and reads cleanly; the single "打开" button in user mode now spans the full card as an obvious, easy-to-tap CTA.
+3. **Admin page reorg.** Previously every section (published shelf, listener picker, drafts, upload, dictate) ran together in one undifferentiated column with no visual grouping — matching your "混乱" complaint. Moved "add a book" (the admin's actual primary action — upload or dictate) to the top, right under a compact listener bar, ahead of the published-shelf browsing list; grouped drafts ("我的草稿") and the published shelf ("我的书架") into their own consistently-styled sections with dividers and bilingual headings. This was a pure reorder plus shared CSS — every element kept its id, so no JS changes were needed anywhere.
+4. **Two bugs found and fixed along the way, both live-verified before and after:**
+   - The dictation "Listening…" indicator had an inline `display:flex` style that silently defeated its `hidden` attribute (the exact pitfall already flagged in project notes for a few other elements) — it visibly flashed on page load before anyone touched the microphone. Fixed by adding it to the existing `[hidden]`-override list.
+   - While re-verifying the finished admin page against the *real* production catalog (not test data), found that with 100 registered access codes already on file, the "已登记访问码" list rendered as one giant, unbounded wall of wrapped text — pushing the actual book list far down the page. This is exactly the kind of clutter you flagged, so fixed it in the same pass: capped it to a small scrollable strip instead.
+5. Verification note: window-resize-based mobile emulation wasn't taking effect in this environment (the browser tool reported success but the page kept rendering at desktop width), so I verified pixel-accurate mobile rendering a different way — embedding the live app in a fixed-size (390×844) same-origin iframe and screenshotting it, both against local test data and, after deploying, against the real production catalog.
+355 tests pass (CSS/HTML-only changes; no JS logic changed). Deployed to audiobook.tumei.online in two passes and pushed to GitHub.
+
+**最终报告（中文）：** 修复了书名截断问题（根本原因是单行省略号，并非专属手机端的 bug），并把管理员落地页重新整理成分区清晰的结构；在验证过程中线上又发现并顺手修复了第三个"混乱"问题。
+
+1. **书名为什么会被截断。** 书架/书库卡片（`.library-item`）把加粗的标题和 1–3 个操作按钮硬塞进同一行，标题被强制 `white-space: nowrap` + 省略号。由于整个 App 的内容列宽在所有设备上都被限制在 `max-width: 480px`（不只是手机），严格来说这不完全是"手机专属" bug——但在真实手机屏幕上表现最差，因为没有多余的桌面端留白来缓冲。像"Football Academy: Boys United"这样的标题稳定地变成"Football Academy: Boys Unit…"，管理员模式下（3 个按钮而不是 1 个）情况更糟。在动手之前先在线上实测确认了这一点。
+2. **修复方式：** 把卡片改造成上下堆叠结构——标题在上（现在正常换行，限制最多 3 行，避免个别离谱的长标题把卡片撑爆），下面是一整行满宽的操作按钮，不再和标题挤在一起。直接在线上用真实的长标题验证过（"Animal Life Cycles (Rachel Bladon) (z-library.sk, 1lib.sk, z-lib.sk)"）：现在完整换行、清晰可读；用户模式下单独的"打开"按钮现在占满卡片宽度，成为一个明显、好点的大按钮。
+3. **管理员页面重新整理。** 之前所有板块（已发布书架、听众选择、草稿、上传、口述）挤在同一列里没有任何视觉分组，正对应你说的"混乱"。把"添加新书"（管理员真正的主要操作——上传或口述）挪到了最上面，紧跟在精简版的听众选择条下面，排在浏览已发布书架之前；把草稿列表（"我的草稿"）和已发布书架（"我的书架"）分别整理成风格统一、带分隔线和中英文标题的独立板块。这纯粹是顺序调整加共享 CSS 样式——所有元素的 id 都没变，因此完全不需要改动任何 JS 代码。
+4. **顺带发现并修复的两个 bug，改动前后都做了线上实测验证：**
+   - 口述功能的"Listening…"提示有一条内联的 `display:flex` 样式，悄悄让它的 `hidden` 属性失效（这正是项目笔记里之前针对其他几个元素记录过的同一个坑）——页面刚加载、还没碰麦克风时它就会一闪而过地显示出来。修复方式是把它加进已有的 `[hidden]` 覆盖名单里。
+   - 在用*真实*线上目录（不是测试数据）复核整理好的管理员页面时，发现当前已经登记了 100 个访问码，"已登记访问码"列表被渲染成一堵毫无限制、不断换行的文字墙——把真正的书籍列表挤到了页面很靠下的位置。这正是你说的那种"混乱"，所以在同一轮里顺手修掉了：改成一个高度受限、可滚动的小方框。
+5. **验证说明：** 在当前环境里，基于窗口缩放的手机模拟没有生效（浏览器工具报告成功，但页面实际仍按桌面宽度渲染），所以我改用另一种方式做了像素级精确的手机端验证——把线上应用嵌入一个固定尺寸（390×844）的同源 iframe 里截图观察，先用本地测试数据验证，部署后又对着真实的线上书籍目录验证了一遍。
+355 个测试通过（只改了 CSS/HTML，没有改动任何 JS 逻辑）。分两轮部署到了 audiobook.tumei.online 并推送 GitHub。
