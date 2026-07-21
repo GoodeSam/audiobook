@@ -668,3 +668,29 @@ Verified live in the browser: entering fullscreen from both full-text and subtit
 5. **收听体验：** 播放器页头新增一个模式切换按钮（如果某一章只有一种模式则完全隐藏），点击会在该章可用的模式之间循环——需要时用听音频下载时同一套进度框远程下载对应模式（这个进度框之前有个 z-index 问题，会被全屏播放器遮住看不见，这次也一并修好了）——下载完成后原地切换音频，保留当前播放位置和播放/暂停状态，而不是重新从头播放这一章。你上次选的模式会被记住，下次自动沿用。
 6. 这次没有只靠单元测试，而是在真实浏览器里完整走了一遍流程验证，因为这本质上是一个工作流功能：徽章正确显示和删除（含回退逻辑）、发布 ZIP 里包含正确的独立文件且清单正确、模式按钮在单模式章节正确隐藏、在多模式章节正确循环切换（保留播放位置）、下载失败的分支能正确回退而不会让播放器崩溃。
 354 个测试通过（顺带删掉了 4 个此前重复的测试，因为 publish-export.js 现在有了自己完整的测试套件）。已部署 audiobook.tumei.online（前端 + 后端一处小的 audioCount 修复）并推送 GitHub。
+
+\>> /codex-toolkit:audit-fix Run a Codex mini audit + fix cycle over everything changed since the last full audit.
+
+**Final report (EN):** Audited the last 8 commits (chapter-fragmentation fix, embedded-image publish fix, PDF ligature/quote-boundary fixes, and the multi-audio-mode feature) with a Codex mini (5-dimension) audit, verified every finding by hand, fixed all 7, and had Codex independently re-verify the fixes afterward.
+
+1. **Two real regressions in this session's own multi-audio-mode work, both High:**
+   - The single-chapter **Generate Audio** button's skip-check looked at "does this chapter have *any* audio" instead of "does it have the *currently selected mode*" — so it silently did nothing if you tried to add a second mode to a chapter that already had one. (Bulk-generate already got this fix in the original multi-mode commit; this button didn't.)
+   - `restoreBookAudio` had a subtle bug: when loading records for a chapter, `if (rec.timeline) state.audioTimelines[...] = rec.timeline` only updates when the record *has* a timeline — so if the most-recently-generated mode happened to have no timeline, the *previous* mode's stale timeline stayed in place while the blob/mode correctly moved to the new one, desyncing playback highlighting from what's actually playing.
+2. **A real race condition in the player's new mode-switch button (High):** it only checked "is the player still open" after awaiting a remote mode download, not "is this still the same chapter" — so downloading a mode for chapter 3, then quickly navigating to chapter 4 before the download finished, could let the stale chapter-3 result overwrite chapter 4's now-playing audio. Fixed by capturing the requesting chapter index up front and discarding the result if it no longer matches; verified live in the browser with exactly this sequence (slow chapter-0 switch, navigate to chapter 1 before it resolves, confirm chapter 1's state survives untouched).
+3. **A genuine concurrency bug in the publish backend (High), pre-existing:** two concurrent publishes of the *same* book ID shared a staging directory derived only from the book ID, so one request's extraction could collide with the other's. Fixed with a unique-per-request staging directory. Proved this both ways: a new stress test firing 8 concurrent publishes of the same book ID reliably reproduces real corruption (500 errors, missing directories) on the old code, and passes cleanly 100% of the time on the fix.
+4. **A CLI-script correctness bug (Medium), pre-existing:** `publish-book.sh` embedded the book title directly into a single-quoted SSH command — any title with an apostrophe (`Charlotte's Web`, `O'Reilly`, extremely common) would break the remote command. Fixed by base64-encoding the title across the SSH boundary.
+5. **A silent contract violation in the chapter splitter (Medium), pre-existing:** `splitIntoParts` promises "at least `minParts` parts" for 10+ chapters, but chapter-based splitting drops empty chapters before checking that promise — so 12 chapters with 4 empty ones could silently return only 8 parts. Added the missing length check plus a regression test (confirmed: fails on the old code with exactly 8 parts, passes with the fix).
+6. **One Low finding** — a genuinely dead `summary` string that was built but never read — now gets logged via `console.warn` instead of discarded.
+355 tests pass (1 new regression test). Deployed to audiobook.tumei.online (frontend + both backend scripts) and pushed to GitHub.
+
+**最终报告（中文）：** 用 Codex 的 mini（5 维度）审计检查了最近 8 次提交（章节碎片化修复、发布清单内嵌图片修复、PDF 连字/引号断句修复、以及多音频模式功能），逐条人工核实后修复了全部 7 个问题，修完之后又让 Codex 独立复核了一遍。
+
+1. **本次多音频模式功能自己引入的两个真实回归，都是 High：**
+   - 单章节的"生成音频"按钮，跳过检查看的是"这一章是否已有*任意*音频"，而不是"是否已有*当前选中的这个模式*"——所以想给已经有一种模式的章节追加第二种模式时，点按钮会悄悄什么都不做。（批量生成在最初那次多模式提交里已经修过这个问题，这个按钮当时漏掉了。）
+   - `restoreBookAudio` 有个隐蔽 bug：加载某章节的记录时，`if (rec.timeline) state.audioTimelines[...] = rec.timeline` 只在记录*有* timeline 时才更新——所以如果最新生成的那个模式恰好没有 timeline，*上一个*模式残留的旧 timeline 会留在原地，而音频文件和模式指针却已经正确切换到新模式，导致播放高亮和实际播放内容对不上。
+2. **播放器新加的模式切换按钮里有一个真实的竞态条件（High）：** 它在等待远程模式下载完成后，只检查"播放器是否还开着"，没检查"是不是还是同一章"——于是给第 3 章下载某个模式，还没下载完就快速切到第 4 章，第 3 章那个过期的结果最终返回时会把第 4 章正在播放的音频覆盖掉。修复方式是在发起请求前先记下当时的章节序号，结果返回后如果序号已经对不上就丢弃，不再应用。已在浏览器里按这个确切顺序验证过（第 0 章的慢速切换、切到第 1 章后等它才返回，确认第 1 章状态完好无损）。
+3. **发布后端存在一个真实的并发 bug（High），是之前就有的：** 两个并发的、发布*同一本*书的请求会共用一个仅由书籍 ID 派生出来的暂存目录，导致互相踩踏。修复方式是给每个请求单独分配暂存目录。两个方向都验证过：新增的压力测试同时发起 8 个针对同一本书 ID 的并发发布，在旧代码上能稳定复现真实损坏（500 错误、目录丢失），在修复后的代码上则每次都能干净通过。
+4. **命令行脚本里的一个正确性 bug（Medium），是之前就有的：** `publish-book.sh` 把书名直接拼进单引号包裹的 SSH 命令里——任何带撇号的书名（比如《Charlotte's Web》、《O'Reilly》这类极其常见的标题）都会打断远程命令。修复方式是让书名以 base64 编码的形式跨越 SSH 边界传输。
+5. **章节分割器里一个悄悄违反自身约定的问题（Medium），是之前就有的：** `splitIntoParts` 承诺"10 章以上至少产出 minParts 份"，但按章节分割时会先丢弃空章节，之后才检查这个承诺是否满足——所以 12 章里有 4 章是空的话，可能悄悄只产出 8 份。补上了缺失的数量检查，并新增了一条回归测试（确认：旧代码下正好产出 8 份、测试失败；修复后测试通过）。
+6. **一个 Low 级别问题**——一个确实构建了却从没被读取过的 `summary` 字符串——现在会通过 `console.warn` 打印出来，而不是白白扔掉。
+355 个测试通过（新增 1 个回归测试）。已部署 audiobook.tumei.online（前端 + 两个后端脚本）并推送 GitHub。
