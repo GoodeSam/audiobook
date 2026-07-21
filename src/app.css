@@ -42,8 +42,24 @@ body {
 /* ── Upload Screen ── */
 
 #upload-screen {
-  align-items: center;
+  /* Plain `align-items: center` vertically centers .upload-container —
+     fine for a short login card, but once the admin's reorganized page
+     (listener bar + add-a-book + drafts + shelf, sometimes 100+ access
+     codes) grows taller than the viewport, flex centering pushes the
+     overflow equally above AND below the box. The top half then sits
+     above the scroll-0 position with no way to scroll up into it —
+     exactly "content that's there but can't be reached" (this is what
+     was reported as obscured/cut-off content, worst on short mobile
+     viewports). `safe center` keeps the nice centering for short content
+     but falls back to start-alignment instead of overflowing the start
+     edge once content doesn't fit — paired with an auto/min height
+     (growing with content instead of a fixed 100vh + visible overflow)
+     so oversized content just scrolls normally like a regular page. */
+  align-items: safe center;
   justify-content: center;
+  height: auto;
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .upload-container {

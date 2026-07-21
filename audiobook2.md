@@ -199,6 +199,12 @@ Ran 2 shell commands
 
 从用户端，进入书架后，对于一本较大的书，点击打开后半天没有反应。对这个问题进行修改
 
+---
+
+[https://audiobook.tumei.online/#adam 从这个端口进入后，有的内容被遮挡，不可显示。客户端也有显示不完全的问题](https://audiobook.tumei.online/#adam)
+
+
+
 
 
 让codex对本系统进行两轮评估和修改
