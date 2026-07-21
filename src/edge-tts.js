@@ -15,6 +15,7 @@ import { detectLanguage, splitByLanguage } from './language-utils.js';
 import { convertNumbersToChinese } from './number-to-chinese.js';
 import { buildTimeline, splitIntoSentences } from './audio-timeline.js';
 import { BEEP_MP3_BASE64 } from './beep-data.js';
+import { cancelTranslation } from './ms-translator.js';
 
 export { splitIntoSentences };
 
@@ -475,6 +476,7 @@ export function validateVoiceSettings({ audioMode, voiceEn, voiceZh, hasTranslat
  */
 export function cancelGeneration() {
   _cancelled = true;
+  cancelTranslation(); // stop sentence-mode per-sentence translation too
   if (_activeWebSocket) {
     _activeWebSocket.close();
     _activeWebSocket = null;

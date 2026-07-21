@@ -34,6 +34,9 @@ function parseCFB(buf) {
   const ENDOFCHAIN = 0xfffffffe;
   const sectorOffset = (s) => (s + 1) << sectorShift;
   const entriesPerSector = sectorSize / 4;
+  // Upper bound on any sector-chain walk: a sector can't legitimately be
+  // visited twice, so this caps both iteration count and cycles.
+  const maxSectors = Math.max(1, Math.floor(buf.byteLength / sectorSize));
 
   // DIFAT: 109 header entries + optional chained DIFAT sectors
   const difat = [];
@@ -42,7 +45,10 @@ function parseCFB(buf) {
     if (v !== FREESECT) difat.push(v);
   }
   let difatSector = firstDifatSector;
-  for (let i = 0; i < numDifatSectors && difatSector < 0xfffffffa; i++) {
+  const visitedDifatSectors = new Set();
+  for (let i = 0; i < numDifatSectors && i < maxSectors && difatSector < 0xfffffffa; i++) {
+    if (visitedDifatSectors.has(difatSector) || sectorOffset(difatSector) + sectorSize > buf.byteLength) break;
+    visitedDifatSectors.add(difatSector);
     const base = sectorOffset(difatSector);
     for (let j = 0; j < entriesPerSector - 1; j++) {
       const v = dv.getUint32(base + j * 4, true);
@@ -64,10 +70,14 @@ function parseCFB(buf) {
     const parts = [];
     let s = start;
     let remaining = byteLength ?? Infinity;
-    let guard = 0;
-    while (s < 0xfffffffa && s !== ENDOFCHAIN && remaining > 0 && guard++ < 1e6) {
+    const visited = new Set();
+    while (s < 0xfffffffa && s !== ENDOFCHAIN && remaining > 0 && visited.size < maxSectors) {
+      if (visited.has(s)) break; // cycle in the FAT chain
+      visited.add(s);
+      const off = sectorOffset(s);
+      if (off >= buf.byteLength) break;
       const take = Math.min(sectorSize, remaining);
-      parts.push(new Uint8Array(buf, sectorOffset(s), Math.min(take, buf.byteLength - sectorOffset(s))));
+      parts.push(new Uint8Array(buf, off, Math.min(take, buf.byteLength - off)));
       remaining -= take;
       s = fat[s];
       if (s === undefined) break;

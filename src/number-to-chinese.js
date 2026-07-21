@@ -15,6 +15,7 @@ const DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '
  */
 function intToChinese(n) {
   if (n === 0) return '零';
+  if (!Number.isFinite(n)) return n.toString(); // e.g. an oversized numeral parsed as Infinity
   if (n < 0) return n.toString();
 
   let result = '';

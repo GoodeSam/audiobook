@@ -93,26 +93,46 @@ export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}
   const maxRetries = opts.maxRetries ?? MAX_RETRIES;
   const rateLimitDelays = opts.rateLimitDelays ?? RATE_LIMIT_DELAYS;
 
+  const transientDelayFor = (attempt) => TRANSIENT_DELAYS[attempt] ?? TRANSIENT_DELAYS[TRANSIENT_DELAYS.length - 1];
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const token = await msGetAuthToken(fetchFn);
-    const params = new URLSearchParams({ 'api-version': '3.0', to });
-    if (from && from !== 'auto') {
-      params.set('from', from);
+    const signal = _abortController?.signal;
+    if (signal?.aborted) {
+      const e = new Error('Translation cancelled'); e.name = 'AbortError'; throw e;
     }
 
-    const signal = _abortController?.signal;
-    const resp = await fetchFn(`${MS_TRANSLATE_URL}?${params.toString()}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(texts.map(t => ({ Text: t }))),
-      ...(signal ? { signal } : {}),
-    });
+    let resp;
+    try {
+      const token = await msGetAuthToken(fetchFn);
+      const params = new URLSearchParams({ 'api-version': '3.0', to });
+      if (from && from !== 'auto') {
+        params.set('from', from);
+      }
+      resp = await fetchFn(`${MS_TRANSLATE_URL}?${params.toString()}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(texts.map(t => ({ Text: t }))),
+        ...(signal ? { signal } : {}),
+      });
+    } catch (err) {
+      // Network failure (offline, DNS, connection reset, aborted) — retry
+      // like any other transient error instead of bypassing the retry loop.
+      if (err.name === 'AbortError') throw err;
+      if (attempt === maxRetries) throw new Error(`Microsoft Translate network error: ${err.message}`);
+      await abortableSleep(transientDelayFor(attempt));
+      continue;
+    }
 
     if (resp.ok) {
       const data = await resp.json();
+      // A short/malformed array would otherwise silently drop translations
+      // (chapter reconstruction inserts `undefined` for the missing ones).
+      if (!Array.isArray(data) || data.length !== texts.length) {
+        throw new Error(`Microsoft Translate error: expected ${texts.length} translations, got ${Array.isArray(data) ? data.length : typeof data}`);
+      }
       return data.map((item, i) => {
         if (item?.translations?.[0]?.text) return item.translations[0].text;
         throw new Error(`Unexpected response for text ${i}`);
@@ -167,14 +187,23 @@ export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}
  */
 export async function translateTexts(texts, from, to, opts = {}) {
   const { fetchFn = fetch, onWait, onChunk, onFallback } = opts;
-  const out = [];
-  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-    if (i > 0) await new Promise(r => setTimeout(r, BATCH_INTERVAL_MS));
-    const chunk = await translateBatch(texts.slice(i, i + BATCH_SIZE), from, to, fetchFn, { onWait, onFallback });
-    out.push(...chunk);
-    if (onChunk) onChunk(Math.min(i + BATCH_SIZE, texts.length), texts.length);
+  _cancelled = false;
+  _abortController = new AbortController();
+  try {
+    const out = [];
+    for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+      if (_cancelled) throw new Error('Translation cancelled');
+      if (i > 0) await abortableSleep(BATCH_INTERVAL_MS);
+      const chunk = await translateBatch(texts.slice(i, i + BATCH_SIZE), from, to, fetchFn, { onWait, onFallback });
+      out.push(...chunk);
+      if (onChunk) onChunk(Math.min(i + BATCH_SIZE, texts.length), texts.length);
+    }
+    _abortController = null;
+    return out;
+  } catch (err) {
+    if (_cancelled || err.name === 'AbortError') throw new Error('Translation cancelled');
+    throw err;
   }
-  return out;
 }
 
 // shouldSkipParagraph aliased from shared utility

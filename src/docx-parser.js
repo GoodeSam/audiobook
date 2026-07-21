@@ -7,6 +7,25 @@
  * styled text and convert it to Markdown with chapter grouping.
  */
 
+// Generous cap for a manuscript's decompressed XML — guards against ZIP-bomb
+// entries (tiny compressed size, huge uncompressed size) exhausting memory.
+const MAX_DECOMPRESSED_XML_BYTES = 50 * 1024 * 1024;
+
+/** Decompress one ZIP entry as text, refusing entries that are implausibly large. */
+async function readZipEntryText(zip, path, maxBytes = MAX_DECOMPRESSED_XML_BYTES) {
+  const entry = zip.file(path);
+  if (!entry) return null;
+  const declaredSize = entry._data?.uncompressedSize;
+  if (typeof declaredSize === 'number' && declaredSize > maxBytes) {
+    throw new Error(`${path} 解压后过大 (${Math.round(declaredSize / 1024 / 1024)} MB)，已拒绝处理`);
+  }
+  const text = await entry.async('text');
+  if (text.length > maxBytes) {
+    throw new Error(`${path} 解压后过大，已拒绝处理`);
+  }
+  return text;
+}
+
 const HEADING_STYLES = {
   'Heading1': 1, 'heading 1': 1, 'Heading11': 1,
   'Heading2': 2, 'heading 2': 2, 'Heading21': 2,
@@ -27,7 +46,7 @@ export async function parseDOCX(file) {
   const JSZip = (await import('jszip')).default;
   const zip = await JSZip.loadAsync(file);
 
-  const docXml = await zip.file('word/document.xml')?.async('text');
+  const docXml = await readZipEntryText(zip, 'word/document.xml');
   if (!docXml) throw new Error('Invalid DOCX: missing word/document.xml');
 
   // Parse numbering definitions for list detection
@@ -63,7 +82,7 @@ export async function parseDOCX(file) {
  * Parse numbering.xml for list style detection.
  */
 async function parseNumbering(zip) {
-  const numXml = await zip.file('word/numbering.xml')?.async('text');
+  const numXml = await readZipEntryText(zip, 'word/numbering.xml');
   if (!numXml) return {};
 
   const parser = new DOMParser();
@@ -121,7 +140,8 @@ function parseParagraph(pNode, numberingMap) {
     if (numPr) {
       const numId = numPr.getElementsByTagName('w:numId')[0]?.getAttribute('w:val');
       const ilvl = numPr.getElementsByTagName('w:ilvl')[0]?.getAttribute('w:val') || '0';
-      const indent = '  '.repeat(parseInt(ilvl));
+      const ilvlNum = Math.max(0, Math.min(8, parseInt(ilvl, 10) || 0)); // OOXML supports levels 0-8
+      const indent = '  '.repeat(ilvlNum);
       const numDef = numberingMap[numId];
       const listType = numDef?.[ilvl] || 'bullet';
       listPrefix = indent + (listType === 'bullet' ? '- ' : '1. ');

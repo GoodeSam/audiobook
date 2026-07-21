@@ -28,6 +28,13 @@ scp -i "$KEY" -q "$PW_FILE" "$HOST:/etc/audiobook-api-token"
 
 ssh -i "$KEY" "$HOST" bash -s <<EOF
 set -euo pipefail
+LIB_DIR="/var/www/audiobook.tumei.online/library"
+
+# Dedicated unprivileged service account — the API previously ran as root
+id -u audiobook-api >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin audiobook-api
+mkdir -p "\$LIB_DIR"
+chown -R audiobook-api:audiobook-api "\$LIB_DIR"
+chown audiobook-api:audiobook-api /etc/audiobook-api-token
 chmod 600 /etc/audiobook-api-token
 
 cat > /etc/systemd/system/audiobook-api.service <<'UNIT'
@@ -36,9 +43,22 @@ Description=Audiobook library admin API
 After=network.target
 
 [Service]
+User=audiobook-api
+Group=audiobook-api
 ExecStart=/usr/bin/python3 /usr/local/lib/audiobook/library-api.py
 Restart=always
 RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/www/audiobook.tumei.online/library
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target
@@ -47,6 +67,12 @@ UNIT
 systemctl daemon-reload
 systemctl enable --now audiobook-api.service
 systemctl restart audiobook-api.service
+
+# Rate-limit zone must live in the nginx http{} context — a separate
+# conf.d file (loaded alongside the site configs) is the simplest place.
+cat > /etc/nginx/conf.d/audiobook-api-ratelimit.conf <<'RATELIMIT'
+limit_req_zone \$binary_remote_addr zone=audiobook_api:10m rate=30r/s;
+RATELIMIT
 
 # Add the /api/ proxy to the nginx site if not present
 if ! grep -q "location /api/" "$NGINX_CONF"; then
@@ -57,6 +83,7 @@ with open(path) as f:
     conf = f.read()
 block = """
     location /api/ {
+        limit_req zone=audiobook_api burst=20 nodelay;
         proxy_pass http://127.0.0.1:8791;
         proxy_http_version 1.1;
         proxy_request_buffering off;
@@ -73,8 +100,25 @@ print("nginx: /api/ location added")
 PYEOF
   nginx -t
   systemctl reload nginx
+elif ! grep -q "limit_req zone=audiobook_api" "$NGINX_CONF"; then
+  python3 - <<'PYEOF'
+import re
+path = "$NGINX_CONF"
+with open(path) as f:
+    conf = f.read()
+out = re.sub(
+    r"(location /api/ \{)",
+    r"\1\n        limit_req zone=audiobook_api burst=20 nodelay;",
+    conf,
+)
+with open(path, "w") as f:
+    f.write(out)
+print("nginx: rate limit added to existing /api/ location")
+PYEOF
+  nginx -t
+  systemctl reload nginx
 else
-  echo "nginx: /api/ location already present"
+  echo "nginx: /api/ location + rate limit already present"
 fi
 
 sleep 1

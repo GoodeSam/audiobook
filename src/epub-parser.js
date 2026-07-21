@@ -8,6 +8,27 @@
  * Inspired by tepub's extraction pipeline and EasyOriginals' EPUB.js usage.
  */
 
+// Generous cap per decompressed entry — guards against ZIP-bomb entries
+// (tiny compressed size, huge uncompressed size) exhausting memory.
+const MAX_DECOMPRESSED_ENTRY_BYTES = 50 * 1024 * 1024;
+
+/** Decompress one ZIP entry, refusing entries that are implausibly large. */
+async function readZipEntry(zipEntry, path, type, maxBytes = MAX_DECOMPRESSED_ENTRY_BYTES) {
+  const declaredSize = zipEntry._data?.uncompressedSize;
+  if (typeof declaredSize === 'number' && declaredSize > maxBytes) {
+    throw new Error(`${path} 解压后过大 (${Math.round(declaredSize / 1024 / 1024)} MB)，已拒绝处理`);
+  }
+  const data = await zipEntry.async(type);
+  const size = typeof data === 'string' ? data.length : data.byteLength ?? data.length;
+  if (size > maxBytes) throw new Error(`${path} 解压后过大，已拒绝处理`);
+  return data;
+}
+
+async function readZipEntryText(zip, path, maxBytes) {
+  const entry = zip.file(path);
+  return entry ? readZipEntry(entry, path, 'text', maxBytes) : null;
+}
+
 /**
  * Parse an EPUB file and extract chapters with their HTML content.
  *
@@ -19,7 +40,7 @@ export async function parseEPUB(file) {
   const zip = await JSZip.loadAsync(file);
 
   // 1. Find the OPF file via container.xml
-  const containerXml = await zip.file('META-INF/container.xml')?.async('text');
+  const containerXml = await readZipEntryText(zip, 'META-INF/container.xml');
   if (!containerXml) throw new Error('Invalid EPUB: missing container.xml');
 
   const parser = new DOMParser();
@@ -31,7 +52,7 @@ export async function parseEPUB(file) {
   const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : '';
 
   // 2. Parse the OPF file
-  const opfXml = await zip.file(opfPath)?.async('text');
+  const opfXml = await readZipEntryText(zip, opfPath);
   if (!opfXml) throw new Error('Invalid EPUB: missing OPF file');
 
   const opfDoc = parser.parseFromString(opfXml, 'application/xml');
@@ -88,7 +109,7 @@ export async function parseEPUB(file) {
       const zipEntry = zip.file(fullPath);
       if (!zipEntry) { chapters[entry.index] = null; continue; }
 
-      const html = await zipEntry.async('text');
+      const html = await readZipEntry(zipEntry, fullPath, 'text');
       const title = hrefToTitle[entry.href] || `Chapter ${entry.index + 1}`;
       const processedHtml = await resolveImages(html, fullPath, zip);
       chapters[entry.index] = { title, href: entry.href, html: processedHtml };
@@ -116,7 +137,7 @@ async function parseTOC(zip, opfDoc, opfDir, parser) {
     const navRelHref = navItem.getAttribute('href');
     const navFullPath = opfDir + navRelHref;
     const navDir = dirOf(navFullPath);
-    const navXml = await zip.file(navFullPath)?.async('text');
+    const navXml = await readZipEntryText(zip, navFullPath);
     if (navXml) {
       const navDoc = parser.parseFromString(navXml, 'application/xhtml+xml');
       // Only select the TOC nav — avoid page-list, landmarks, etc.
@@ -149,7 +170,7 @@ async function parseTOC(zip, opfDoc, opfDir, parser) {
     const ncxRelHref = ncxItem.getAttribute('href');
     const ncxFullPath = opfDir + ncxRelHref;
     const ncxDir = dirOf(ncxFullPath);
-    const ncxXml = await zip.file(ncxFullPath)?.async('text');
+    const ncxXml = await readZipEntryText(zip, ncxFullPath);
     if (ncxXml) {
       const ncxDoc = parser.parseFromString(ncxXml, 'application/xml');
       for (const navPoint of ncxDoc.querySelectorAll('navPoint')) {
@@ -189,13 +210,17 @@ async function resolveImages(html, docPath, zip) {
     const imgPath = resolveRelativePath(docDir, src);
     const imgFile = zip.file(imgPath);
     if (imgFile) {
-      const blob = await imgFile.async('base64');
-      const ext = src.split('.').pop().toLowerCase();
-      const mime = ext === 'png' ? 'image/png'
-        : ext === 'svg' ? 'image/svg+xml'
-        : ext === 'gif' ? 'image/gif'
-        : 'image/jpeg';
-      replacements.push({ original: src, dataUrl: `data:${mime};base64,${blob}` });
+      try {
+        const blob = await readZipEntry(imgFile, imgPath, 'base64', 15 * 1024 * 1024);
+        const ext = src.split('.').pop().toLowerCase();
+        const mime = ext === 'png' ? 'image/png'
+          : ext === 'svg' ? 'image/svg+xml'
+          : ext === 'gif' ? 'image/gif'
+          : 'image/jpeg';
+        replacements.push({ original: src, dataUrl: `data:${mime};base64,${blob}` });
+      } catch {
+        // Implausibly large embedded image — skip it, leave the original src in place
+      }
     }
   }
 

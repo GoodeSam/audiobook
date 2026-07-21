@@ -228,6 +228,7 @@ async function handleFile(file) {
     // Cancel any in-flight operations from a previous session
     cancelGeneration();
     cancelTranslation();
+    if (sttActive) stopSTT();
     hideProgress();
 
     const ext = file.name.toLowerCase().split('.').pop();
@@ -273,10 +274,24 @@ async function handleFile(file) {
     // per-chapter user downloads stay manageable.
     book.chapters = autoSplitChapters(book.chapters);
 
-    // Merge previously saved translations for the same book (re-upload case)
-    const bookId = makeBookId(book.title);
+    // Merge previously saved translations for the same book (re-upload case).
+    // Same title + same content = same book (id stays stable, reuse storage).
+    // Same title but different content (a revised edition, or a different
+    // book with a colliding title) gets a distinct id instead of silently
+    // inheriting the other book's translations/audio.
+    const baseId = makeBookId(book.title);
+    let bookId = baseId;
+    let stored = null;
     try {
-      const stored = await getBook(bookId);
+      const existing = await getBook(baseId);
+      if (existing) {
+        if (chaptersMatch(existing.chapters, book.chapters)) {
+          stored = existing;
+        } else {
+          bookId = `${baseId}-${hashBookContent(book.chapters)}`;
+          stored = await getBook(bookId);
+        }
+      }
       if (stored && stored.chapters?.length === book.chapters.length) {
         stored.chapters.forEach((sc, i) => {
           if (sc.translatedMarkdown) book.chapters[i].translatedMarkdown = sc.translatedMarkdown;
@@ -1310,15 +1325,9 @@ btnDownloadAll.addEventListener('click', async () => {
 
     const mp3Blobs = chapters.map((_, i) => blobs[i]).filter(Boolean);
     if (mp3Blobs.length > 1) {
-      const arrayBuffers = await Promise.all(mp3Blobs.map(b => b.arrayBuffer()));
-      const totalLength = arrayBuffers.reduce((sum, ab) => sum + ab.byteLength, 0);
-      const merged = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const ab of arrayBuffers) {
-        merged.set(new Uint8Array(ab), offset);
-        offset += ab.byteLength;
-      }
-      zip.file(`${sanitizeFilename(state.book.title)}_complete.mp3`, new Blob([merged], { type: 'audio/mpeg' }));
+      // Concatenate the blobs directly — the browser handles this without
+      // requiring every chapter's audio to be read into JS memory at once.
+      zip.file(`${sanitizeFilename(state.book.title)}_complete.mp3`, new Blob(mp3Blobs, { type: 'audio/mpeg' }));
     }
 
     const zipBlob = await zip.generateAsync({ type: 'blob' });
@@ -1580,6 +1589,24 @@ if (btnSttUse) {
 function makeBookId(title) {
   const slug = sanitizeFilename(title || '').toLowerCase().replace(/\s+/g, '-');
   return slug || 'untitled';
+}
+
+/** Same chapter count and markdown, in order — i.e. genuinely the same upload. */
+function chaptersMatch(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  return a.every((ch, i) => ch.markdown === b[i]?.markdown);
+}
+
+/** Cheap fingerprint over chapter content, used only to tell apart two
+ * different books/editions that happen to share a sanitized title. */
+function hashBookContent(chapters) {
+  let h = 0;
+  for (const ch of chapters) {
+    const text = (ch.markdown || '').slice(0, 4000); // bounded — a fingerprint, not a full checksum
+    for (let i = 0; i < text.length; i++) h = (h * 31 + text.codePointAt(i)) | 0;
+    h = (h * 31 + text.length) | 0;
+  }
+  return (h >>> 0).toString(36);
 }
 
 /** Persist the current book (chapters + translations) — fire-and-forget. */
@@ -2088,6 +2115,18 @@ async function renderShelf(prefetchedCatalog) {
   shelfEmpty.hidden = true;
   try {
     const catalog = prefetchedCatalog || await fetchCatalog(import.meta.env.BASE_URL);
+
+    // A code restored from a previous session may have been revoked since —
+    // re-check against the live catalog instead of trusting it forever.
+    if (!adminMode && accessCode && !isKnownCode(catalog, accessCode)) {
+      accessCode = '';
+      localStorage.removeItem(ACCESS_KEY);
+      currentUserId = null;
+      renderUserHome();
+      showLoginError('访问码已失效，请重新登录或联系管理员微信 tumei321123');
+      return;
+    }
+
     // 权限暂时全开放：所有登录用户都能看到全部书籍（按 2026-07 要求；
     // 恢复按码过滤时改回 visibleBooks(catalog, accessCode)）
     const books = (catalog.books || []).slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -2320,7 +2359,7 @@ function openPublishModal() {
   publishModalInfo.textContent =
     `《${state.book.title}》 · ${state.book.chapters.length} 章 · ${audioCount} 段音频`
     + (existing ? ` — 已于 ${formatPublishDate(existing.updatedAt)} 发布过，本次发布将覆盖网站版本` : '');
-  publishAccessInput.value = '';
+  publishAccessInput.value = existing ? accessToInput(existing.access) : '';
   publishTokenInput.value = getSavedToken();
   publishForm.hidden = false;
   publishResult.hidden = true;

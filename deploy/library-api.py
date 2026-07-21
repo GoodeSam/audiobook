@@ -20,11 +20,12 @@ Endpoints (all JSON responses):
 """
 
 import hmac
-import io
 import json
 import os
 import re
 import shutil
+import tempfile
+import threading
 import time
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,9 +33,19 @@ from urllib.parse import urlparse, parse_qs
 
 LIB = "/var/www/audiobook.tumei.online/library"
 TOKEN_PATH = "/etc/audiobook-api-token"
-MAX_UPLOAD = 800 * 1024 * 1024  # 800 MB
+MAX_UPLOAD = 800 * 1024 * 1024  # 800 MB — publish ZIP, streamed to a temp file
+MAX_JSON_BODY = 2 * 1024 * 1024  # 2 MB — plenty for /api/access, /api/codes
+MAX_MANIFEST_BYTES = 5 * 1024 * 1024  # book.json
+# Generous ceiling for a full audiobook's chapters + MP3s decompressed —
+# still blocks classic zip-bomb ratios (KB compressed -> GB+ uncompressed).
+MAX_TOTAL_UNCOMPRESSED = 1024 * 1024 * 1024
 BOOK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,80}$")
 SAFE_MEMBER_RE = re.compile(r"^[A-Za-z0-9._-]+$")  # flat filenames only
+
+# Serializes every catalog.json read-modify-write and the publish/delete
+# directory swaps so concurrent admin requests can't interleave and corrupt
+# the catalog or a book's on-disk directory.
+_catalog_lock = threading.Lock()
 
 
 def load_token():
@@ -102,11 +113,12 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def _body(self):
+        """Read a small JSON request body fully into memory."""
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
             return b""
-        if length > MAX_UPLOAD:
-            raise ValueError("upload too large")
+        if length > MAX_JSON_BODY:
+            raise ValueError("request body too large")
         remaining, chunks = length, []
         while remaining > 0:
             chunk = self.rfile.read(min(remaining, 1 << 20))
@@ -115,6 +127,33 @@ class Handler(BaseHTTPRequestHandler):
             chunks.append(chunk)
             remaining -= len(chunk)
         return b"".join(chunks)
+
+    def _body_to_tempfile(self):
+        """Stream a large request body (the publish ZIP) straight to disk
+        instead of buffering it twice in RAM (once while reading, once when
+        joining chunks). Caller must delete the returned path when done."""
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            raise ValueError("empty request body")
+        if length > MAX_UPLOAD:
+            raise ValueError("upload too large")
+        fd, path = tempfile.mkstemp(prefix=".upload-", dir=LIB)
+        try:
+            remaining = length
+            with os.fdopen(fd, "wb") as out:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(remaining, 1 << 20))
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    remaining -= len(chunk)
+            return path
+        except BaseException:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            raise
 
     def log_message(self, fmt, *args):  # journal-friendly one-liners
         print("%s - %s" % (self.address_string(), fmt % args), flush=True)
@@ -149,6 +188,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._set_codes()
         except (ValueError, json.JSONDecodeError, zipfile.BadZipFile, KeyError) as e:
             return self._json(400, {"error": str(e)})
+        except OSError as e:
+            return self._json(500, {"error": "server storage error: " + str(e)})
         self._json(404, {"error": "not found"})
 
     def do_DELETE(self):
@@ -161,55 +202,88 @@ class Handler(BaseHTTPRequestHandler):
         book_id = m.group(1)
         if not BOOK_ID_RE.match(book_id):
             return self._json(400, {"error": "bad book id"})
-        catalog = read_catalog()
-        before = len(catalog.get("books", []))
-        catalog["books"] = [b for b in catalog.get("books", []) if b.get("id") != book_id]
-        if len(catalog["books"]) == before:
-            return self._json(404, {"error": "book not found: " + book_id})
-        shutil.rmtree(os.path.join(LIB, book_id), ignore_errors=True)
-        write_catalog(catalog)
+        with _catalog_lock:
+            catalog = read_catalog()
+            before = len(catalog.get("books", []))
+            catalog["books"] = [b for b in catalog.get("books", []) if b.get("id") != book_id]
+            if len(catalog["books"]) == before:
+                return self._json(404, {"error": "book not found: " + book_id})
+            shutil.rmtree(os.path.join(LIB, book_id), ignore_errors=True)
+            write_catalog(catalog)
         self._json(200, {"ok": True, "deleted": book_id})
 
     # ── handlers ──
     def _publish(self, url):
         access = parse_access(parse_qs(url.query).get("access", [""])[0])
-        data = self._body()
-        zf = zipfile.ZipFile(io.BytesIO(data))
-        names = zf.namelist()
-        if "book.json" not in names:
-            raise ValueError("book.json not found in zip")
-        for name in names:
-            if not SAFE_MEMBER_RE.match(name):
-                raise ValueError("unsafe zip member: " + name)
-        manifest = json.loads(zf.read("book.json"))
-        book_id = str(manifest.get("id") or "")
-        if not BOOK_ID_RE.match(book_id):
-            raise ValueError("bad book id in manifest: " + repr(book_id))
+        upload_path = self._body_to_tempfile()
+        staging = None
+        try:
+            with zipfile.ZipFile(upload_path) as zf:
+                infos = zf.infolist()
+                names = [i.filename for i in infos]
+                if "book.json" not in names:
+                    raise ValueError("book.json not found in zip")
+                for name in names:
+                    if not SAFE_MEMBER_RE.match(name):
+                        raise ValueError("unsafe zip member: " + name)
 
-        dest = os.path.join(LIB, book_id)
-        os.makedirs(dest, exist_ok=True)
-        # Replace contents wholesale so stale chapters never linger
-        for existing in os.listdir(dest):
-            os.remove(os.path.join(dest, existing))
-        for name in names:
-            with zf.open(name) as src, open(os.path.join(dest, name), "wb") as out:
-                shutil.copyfileobj(src, out)
-            os.chmod(os.path.join(dest, name), 0o644)
+                # Reject decompression bombs before extracting anything.
+                total_uncompressed = 0
+                for info in infos:
+                    if info.file_size > MAX_TOTAL_UNCOMPRESSED:
+                        raise ValueError("zip member too large: " + info.filename)
+                    total_uncompressed += info.file_size
+                    if total_uncompressed > MAX_TOTAL_UNCOMPRESSED:
+                        raise ValueError("zip archive too large when decompressed")
 
-        chapters = manifest.get("chapters", [])
-        entry = {
-            "id": book_id,
-            "title": manifest.get("title") or book_id,
-            "chapterCount": len(chapters),
-            "audioCount": sum(1 for c in chapters if c.get("audioFile")),
-            "access": access,
-            "updatedAt": int(time.time() * 1000),
-        }
-        catalog = read_catalog()
-        catalog["books"] = [b for b in catalog.get("books", []) if b.get("id") != book_id]
-        catalog["books"].append(entry)
-        write_catalog(catalog)
-        self._json(200, {"ok": True, "book": entry})
+                book_json_info = zf.getinfo("book.json")
+                if book_json_info.file_size > MAX_MANIFEST_BYTES:
+                    raise ValueError("book.json too large")
+                manifest = json.loads(zf.read("book.json"))
+                book_id = str(manifest.get("id") or "")
+                if not BOOK_ID_RE.match(book_id):
+                    raise ValueError("bad book id in manifest: " + repr(book_id))
+
+                # Extract into a staging directory first — a mid-extraction
+                # failure (bad member, disk full, crash) must never destroy
+                # the book that's already live.
+                staging = os.path.join(LIB, "." + book_id + ".staging")
+                shutil.rmtree(staging, ignore_errors=True)
+                os.makedirs(staging, exist_ok=True)
+                for name in names:
+                    with zf.open(name) as src, open(os.path.join(staging, name), "wb") as out:
+                        shutil.copyfileobj(src, out)
+                    os.chmod(os.path.join(staging, name), 0o644)
+
+            chapters = manifest.get("chapters", [])
+            entry = {
+                "id": book_id,
+                "title": manifest.get("title") or book_id,
+                "chapterCount": len(chapters),
+                "audioCount": sum(1 for c in chapters if c.get("audioFile")),
+                "access": access,
+                "updatedAt": int(time.time() * 1000),
+            }
+            dest = os.path.join(LIB, book_id)
+            with _catalog_lock:
+                # Only now, with a fully-extracted and validated staging
+                # directory in hand, do we touch the live book directory.
+                shutil.rmtree(dest, ignore_errors=True)
+                os.replace(staging, dest)
+                staging = None  # already moved — don't clean it up below
+
+                catalog = read_catalog()
+                catalog["books"] = [b for b in catalog.get("books", []) if b.get("id") != book_id]
+                catalog["books"].append(entry)
+                write_catalog(catalog)
+            self._json(200, {"ok": True, "book": entry})
+        finally:
+            if staging:
+                shutil.rmtree(staging, ignore_errors=True)
+            try:
+                os.remove(upload_path)
+            except OSError:
+                pass
 
     def _set_access(self):
         req = json.loads(self._body() or b"{}")
@@ -217,13 +291,14 @@ class Handler(BaseHTTPRequestHandler):
         if not BOOK_ID_RE.match(book_id):
             raise ValueError("bad book id")
         access = parse_access(req.get("access"))
-        catalog = read_catalog()
-        for b in catalog.get("books", []):
-            if b.get("id") == book_id:
-                b["access"] = access
-                b["updatedAt"] = int(time.time() * 1000)
-                write_catalog(catalog)
-                return self._json(200, {"ok": True, "book": b})
+        with _catalog_lock:
+            catalog = read_catalog()
+            for b in catalog.get("books", []):
+                if b.get("id") == book_id:
+                    b["access"] = access
+                    b["updatedAt"] = int(time.time() * 1000)
+                    write_catalog(catalog)
+                    return self._json(200, {"ok": True, "book": b})
         self._json(404, {"error": "book not found: " + book_id})
 
     def _set_codes(self):
@@ -231,9 +306,10 @@ class Handler(BaseHTTPRequestHandler):
         codes = req.get("codes")
         if not isinstance(codes, list):
             raise ValueError("codes must be a list")
-        catalog = read_catalog()
-        catalog["validCodes"] = sorted({str(c).strip().lower() for c in codes if str(c).strip()})
-        write_catalog(catalog)
+        with _catalog_lock:
+            catalog = read_catalog()
+            catalog["validCodes"] = sorted({str(c).strip().lower() for c in codes if str(c).strip()})
+            write_catalog(catalog)
         self._json(200, {"ok": True, "validCodes": catalog["validCodes"]})
 
 

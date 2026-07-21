@@ -28,17 +28,26 @@ export function sanitizeFilename(name) {
  * @param {string} [imageDir='images'] - Directory name for image references.
  * @returns {{ markdown: string, images: Array<{filename: string, data: Uint8Array}> }}
  */
+// Fixed, safe extensions for the image MIME types we actually support —
+// never derive an archive filename from the raw (attacker-controlled) subtype.
+const IMAGE_EXT_BY_SUBTYPE = {
+  png: 'png',
+  jpeg: 'jpg',
+  gif: 'gif',
+  webp: 'webp',
+  'svg+xml': 'svg',
+};
+
 export function extractImagesFromMarkdown(markdown, imageDir = 'images') {
   const images = [];
   let counter = 0;
 
   const cleaned = markdown.replace(
     /!\[([^\]]*)\]\((data:(image\/([^;]+));base64,([^)]+))\)/g,
-    (_match, alt, _fullDataUrl, _mime, subtype, base64Data) => {
+    (match, alt, _fullDataUrl, _mime, subtype, base64Data) => {
+      const ext = IMAGE_EXT_BY_SUBTYPE[subtype];
+      if (!ext) return match; // unsupported/unrecognized image type — leave as-is
       counter++;
-      const ext = subtype === 'svg+xml' ? 'svg'
-        : subtype === 'jpeg' ? 'jpg'
-        : subtype;
       const filename = `image-${String(counter).padStart(3, '0')}.${ext}`;
       const binary = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
       images.push({ filename, data: binary });

@@ -3,7 +3,9 @@
  *
  * The tumei server runs a small admin API (deploy/library-api.py) behind
  * nginx at /api/. Every call carries the admin password in X-Admin-Token.
- * The password is remembered in localStorage after the first prompt.
+ * The password is remembered in sessionStorage after the first prompt —
+ * cleared when the tab closes, unlike localStorage, to shrink how long a
+ * same-origin script compromise could keep using it.
  *
  * The API lives only on audiobook.tumei.online — from local dev or the
  * GitHub Pages build we still talk to the production API (CORS enabled).
@@ -53,15 +55,15 @@ export function makePublishId(title) {
 }
 
 export function getSavedToken() {
-  return localStorage.getItem(TOKEN_KEY) || '';
+  return sessionStorage.getItem(TOKEN_KEY) || '';
 }
 
 export function saveToken(token) {
-  if (token) localStorage.setItem(TOKEN_KEY, token.trim());
+  if (token) sessionStorage.setItem(TOKEN_KEY, token.trim());
 }
 
 export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
 }
 
 async function request(method, path, { token, body, json } = {}) {
