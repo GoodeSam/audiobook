@@ -31,6 +31,33 @@ describe('splitIntoSentences', () => {
   it('returns empty array for blank text', () => {
     expect(splitIntoSentences('   ')).toEqual([]);
   });
+
+  it('splits sentences of single-quoted dialogue (straight quotes)', () => {
+    // Real text from a children's book — every boundary here previously
+    // failed to split because a closing/opening quote sat between the
+    // punctuation and the whitespace, defeating the lookbehind/lookahead.
+    const text = "'Why don't you fly faster?' Hummingbird called to Heron. 'Then you can drink from the flowers too!' Hummingbird looked at Heron behind him, and laughed.";
+    const result = splitIntoSentences(text);
+    expect(result).toEqual([
+      "'Why don't you fly faster?'",
+      'Hummingbird called to Heron.',
+      "'Then you can drink from the flowers too!'",
+      'Hummingbird looked at Heron behind him, and laughed.',
+    ]);
+  });
+
+  it('splits sentences of single-quoted dialogue (curly quotes)', () => {
+    const text = '‘Are you tired, Heron?’ he laughed. ‘I had a very good sleep.’';
+    expect(splitIntoSentences(text)).toEqual([
+      '‘Are you tired, Heron?’ he laughed.',
+      '‘I had a very good sleep.’',
+    ]);
+  });
+
+  it('still splits plain sentences with a double-quoted opener', () => {
+    const result = splitIntoSentences('He said hello. "Good morning," she replied.');
+    expect(result).toEqual(['He said hello.', '"Good morning," she replied.']);
+  });
 });
 
 describe('allocateSentenceSpans', () => {

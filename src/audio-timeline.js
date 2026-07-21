@@ -26,6 +26,19 @@ export function estimateMp3DurationSec(bytes, kbps = EDGE_TTS_KBPS) {
   return (bytes * 8) / (kbps * 1000);
 }
 
+// A closing quote (straight or curly) commonly sits between sentence-ending
+// punctuation and the following space — e.g. `faster?' Hummingbird` — and an
+// opening quote commonly sits between the space and the next sentence's
+// capital — e.g. `laughed. 'Then you...`. Without accounting for these,
+// quote-heavy dialogue never splits into separate sentences, which throws
+// off the per-sentence audio-timeline allocation (and player highlighting)
+// since Edge TTS still pauses at each real sentence boundary underneath.
+const CLOSE_QUOTE = '[\'"’”]';
+const OPEN_QUOTE = '[\'"‘“]';
+const SENTENCE_SPLIT_RE = new RegExp(
+  `(?<=[.!?]${CLOSE_QUOTE}?)\\s+(?=${OPEN_QUOTE}?[A-Z])|(?<=[.!?]${CLOSE_QUOTE}?)$`
+);
+
 /**
  * Split text into sentences (shared with TTS paragraph synthesis).
  * @param {string} text
@@ -34,7 +47,7 @@ export function estimateMp3DurationSec(bytes, kbps = EDGE_TTS_KBPS) {
 export function splitIntoSentences(text) {
   if (!text.trim()) return [];
   return text
-    .split(/(?<=[.!?])\s+(?=[A-Z""])|(?<=[.!?])$/)
+    .split(SENTENCE_SPLIT_RE)
     .map(s => s.trim())
     .filter(s => s.length > 0);
 }

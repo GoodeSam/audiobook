@@ -29,6 +29,35 @@ const CHAPTER_PATTERNS = [
 const PAGES_PER_CHAPTER_DEFAULT = 10;
 
 /**
+ * Join PDF.js text items into a page string using glyph positions, not
+ * item boundaries. Some fonts render ligatures (fi, fl, ffi...) as a
+ * separate text item from the rest of the word, with zero gap to its
+ * neighbors — blindly joining every item with a space (as `.join(' ')`
+ * does) turns "fish" into "fi sh" and "fly" into "fl y". A real word
+ * boundary has a horizontal gap; a ligature glyph run does not.
+ * @param {Array<{str: string, transform: number[], width?: number, height?: number}>} items
+ * @returns {string}
+ */
+export function joinTextItems(items) {
+  let text = '';
+  let prevEndX = null;
+  let prevY = null;
+  for (const item of items) {
+    if (!item.str) continue;
+    if (prevEndX !== null) {
+      const sameLine = prevY !== null && Math.abs(item.transform[5] - prevY) < 1;
+      const gap = sameLine ? item.transform[4] - prevEndX : Infinity;
+      const spaceThreshold = Math.max(1, (item.height || 10) * 0.2);
+      if (gap > spaceThreshold) text += ' ';
+    }
+    text += item.str;
+    prevEndX = item.transform[4] + (item.width || 0);
+    prevY = item.transform[5];
+  }
+  return text;
+}
+
+/**
  * Detect if a line of text marks a chapter break.
  * @param {string} text - First line of a page.
  * @returns {string|null} The chapter title if detected, null otherwise.
@@ -129,7 +158,7 @@ export async function parsePDF(file) {
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    const text = content.items.map(item => item.str).join(' ');
+    const text = joinTextItems(content.items);
     // Clean up: collapse whitespace, trim
     const cleaned = text.replace(/\s+/g, ' ').trim();
     if (cleaned) pages.push(cleaned);

@@ -1,5 +1,51 @@
 import { describe, it, expect } from 'vitest';
-import { groupPagesIntoChapters, detectChapterBreak } from './pdf-parser.js';
+import { groupPagesIntoChapters, detectChapterBreak, joinTextItems } from './pdf-parser.js';
+
+describe('joinTextItems', () => {
+  // Mimics real pdf.js TextItem shape: transform[4]/[5] are x/y, width is
+  // the glyph run's rendered width, height approximates font size.
+  const item = (str, x, y, width, height = 15) => ({ str, transform: [1, 0, 0, 1, x, y], width, height });
+
+  it('glues a ligature glyph run to its word with no inserted space', () => {
+    // "fi" rendered as a separate zero-gap item, as real PDFs do — must
+    // rejoin into "fish", not "fi sh".
+    const items = [
+      item('Heron liked the big', 0, 100, 100),
+      item('fi', 104.6, 100, 8.34),
+      item('sh, and Hummingbird liked', 112.94, 100, 150),
+    ];
+    expect(joinTextItems(items)).toBe('Heron liked the big fish, and Hummingbird liked');
+  });
+
+  it('inserts a space at a real word boundary (item gap ≈ space width)', () => {
+    const items = [
+      item('eat', 0, 100, 20),
+      item('fish from the lake', 24.6, 100, 100), // ~4.6pt gap, same as the real PDF
+    ];
+    expect(joinTextItems(items)).toBe('eat fish from the lake');
+  });
+
+  it('inserts a space (not nothing) when wrapping to a new line', () => {
+    const items = [
+      item('they were', 0, 100, 50),
+      item('good friends', 0, 85, 60), // new line — different y, x resets to line start
+    ];
+    expect(joinTextItems(items)).toBe('they were good friends');
+  });
+
+  it('skips items with empty str', () => {
+    const items = [
+      item('Hello', 0, 100, 30),
+      item('', 30, 100, 0),
+      item(' world', 30, 100, 30),
+    ];
+    expect(joinTextItems(items)).toBe('Hello world');
+  });
+
+  it('handles an empty item list', () => {
+    expect(joinTextItems([])).toBe('');
+  });
+});
 
 describe('detectChapterBreak', () => {
   it('detects "Chapter N" pattern', () => {

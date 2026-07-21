@@ -180,3 +180,14 @@ Ran 2 shell commands
 
 我作为管理员上传了一本稍微长一点的书上去了以后，用户的界面需要等很久才有任何反应。解决这个问题
 
+管理员密码 duuQq1SRS1r6UrcfdnlD
+
+---
+
+
+
+我用本系统生成了 ''/Users/victor/Desktop/books/动物/The Heron and the Hummingbird (Rachel Bladon) ([z-library.sk](http://z-library.sk), [1lib.sk](http://1lib.sk), [z-lib.sk](http://z-lib.sk)).pdf'' 这本书的内容，发现系统把fly 这个单词分隔成了 “fl” 和”y“两个单词，把fish分隔成了fi和sh两个单词。同时，还有的时候，字幕和语音对应的时间不匹配的问题，解决这两个问题
+
+---
+
+让codex对本系统进行两轮评估和修改
