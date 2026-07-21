@@ -10,6 +10,23 @@
 import { sanitizeFilename } from './chapter-export.js';
 
 /**
+ * Strip embedded images from published markdown. The player never renders
+ * or narrates them (stripMarkdown removes every `![alt](url)` before
+ * display/TTS), but a source EPUB that inlines illustrations as base64
+ * data URIs can bloat a chapter's markdown by megabytes — and every user
+ * downloads book.json in full before the reader shows anything. Since
+ * images serve no purpose past this point, they're dropped here instead
+ * of shipped to every listener.
+ */
+function stripImages(markdown) {
+  if (!markdown) return markdown;
+  return markdown
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
  * Build the book.json manifest for publishing.
  * Pure function — testable without blobs.
  *
@@ -27,8 +44,8 @@ export function buildPublishManifest(book, bookId, audioBlobs, audioTimelines = 
     generatedAt: Date.now(),
     chapters: book.chapters.map((ch, idx) => ({
       title: ch.title,
-      markdown: ch.markdown,
-      translatedMarkdown: ch.translatedMarkdown || null,
+      markdown: stripImages(ch.markdown),
+      translatedMarkdown: ch.translatedMarkdown ? stripImages(ch.translatedMarkdown) : null,
       audioFile: audioBlobs[idx] ? `${String(idx + 1).padStart(3, '0')}.mp3` : null,
       audioSize: audioBlobs[idx] ? (audioBlobs[idx].size || 0) : null,
       audioMode: audioBlobs[idx] ? (audioModes[idx] || null) : null,
