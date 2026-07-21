@@ -65,6 +65,18 @@ body {
 .upload-container {
   text-align: center;
   max-width: 480px;
+  /* This is the flex item of #upload-screen's row-direction flex box.
+     Flex items default to min-width: auto, which means the browser will
+     refuse to shrink this below the widest *unbreakable* content inside
+     it (e.g. a long "last played" line with white-space: nowrap) — even
+     though max-width caps it, and even though the viewport is narrower.
+     The result: the whole container renders at its content's minimum
+     width regardless of screen size, gets centered, and overflows evenly
+     off both edges — cutting off the start of every line on a real phone.
+     min-width: 0 lets it actually shrink to fit the viewport; individual
+     long lines inside still clip with their own ellipsis, same as before. */
+  min-width: 0;
+  width: 100%;
   padding: 2rem;
 }
 
