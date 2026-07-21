@@ -1758,6 +1758,14 @@ body.user-mode .chapter-cb {
   font-size: 0.85rem;
   color: var(--text-secondary, #666);
   word-break: break-all;
+  /* A site with many registered access codes turned this into an
+     unbounded wall of text pushing the actual shelf far down the page —
+     cap it to a small scrollable strip instead. */
+  display: block;
+  flex: 1 1 100%;
+  max-height: 4.4rem;
+  overflow-y: auto;
+  line-height: 1.5;
 }
 
 .library-delete {
