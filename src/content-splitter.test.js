@@ -232,4 +232,37 @@ describe('autoSplitChapters', () => {
     expect(out[0].title).toBe('Intro');
     expect(out.filter(c => c.title.startsWith('Body (')).length).toBe(out.length - 1);
   });
+
+  it('does not fragment on embedded base64 images (only narratable text counts toward size)', () => {
+    // A book with modest real prose but several inline images — each image's
+    // base64 payload is far larger than the surrounding text, as with a real
+    // EPUB packed as one XHTML file with embedded illustrations.
+    const bigImage = `![illustration](data:image/jpeg;base64,${'A'.repeat(80000)})`;
+    const textParas = Array.from({ length: 60 }, () => para.repeat(5).trim());
+    const paras = [];
+    textParas.forEach((p, i) => {
+      paras.push(p);
+      if (i % 4 === 0) paras.push(bigImage); // an image roughly every 4 paragraphs
+    });
+    const markdown = paras.join('\n\n');
+
+    const out = autoSplitChapters(
+      [{ title: 'Illustrated Book', markdown, translatedMarkdown: null }],
+      { triggerChars: 9000, targetChars: 6000 }
+    );
+
+    // Same as the plain-text case (60 paragraphs, ~50 chars each) — the
+    // images must not multiply the part count.
+    expect(out.length).toBeLessThan(10);
+    expect(out.length).toBeGreaterThan(1);
+
+    // Each part's actual narratable (non-image) text should stay near target
+    for (const ch of out) {
+      const narratable = ch.markdown
+        .split(/\n\n+/)
+        .filter(p => p.trim() && !p.trim().startsWith('!['))
+        .reduce((s, p) => s + p.length, 0);
+      expect(narratable).toBeLessThan(6000 * 1.5);
+    }
+  });
 });

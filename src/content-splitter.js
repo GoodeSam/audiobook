@@ -7,11 +7,23 @@
  * paragraph granularity allows it, but cannot guarantee it when individual
  * paragraphs have extreme size differences.
  *
+ * Sizes are measured in narratable characters, not raw markdown length —
+ * an embedded image (`![alt](data:...base64...)`) can be tens of KB of
+ * text but contributes nothing to translation or narration time, so it
+ * must not be allowed to dominate the balance.
+ *
  * Each part can be independently translated and converted to audio.
  */
 
+import { isSkipParagraph } from './paragraph-utils.js';
+
 const DEFAULT_MIN_PARTS = 10;
 const MAX_VARIANCE = 0.10;
+
+/** Size a paragraph contributes to balancing — images/rules count as 0. */
+function narratableLength(text) {
+  return isSkipParagraph(text) ? 0 : text.length;
+}
 
 /**
  * Calculate size variance as (max - min) / average.
@@ -44,7 +56,7 @@ export function splitIntoParts(chapters, options = {}) {
     const md = chapters[ci].markdown || '';
     const paras = md.split(/\n\n+/).filter(p => p.trim());
     for (const p of paras) {
-      allParas.push({ text: p, chapterIndex: ci, size: p.length });
+      allParas.push({ text: p, chapterIndex: ci, size: narratableLength(p) });
     }
   }
 
@@ -55,7 +67,7 @@ export function splitIntoParts(chapters, options = {}) {
   // Try chapter-based splitting first if enough chapters
   if (chapters.length >= minParts) {
     const chapterParts = buildChapterParts(chapters, allParas);
-    const chapterSizes = chapterParts.map(p => p.paragraphs.reduce((s, t) => s + t.length, 0));
+    const chapterSizes = chapterParts.map(p => p.paragraphs.reduce((s, t) => s + narratableLength(t), 0));
     if (calculateVariance(chapterSizes) <= MAX_VARIANCE) {
       return chapterParts;
     }
@@ -177,7 +189,8 @@ export function autoSplitChapters(chapters, options = {}) {
   const out = [];
   let changed = false;
   for (const ch of chapters) {
-    const len = (ch.markdown || '').length;
+    const paras = (ch.markdown || '').split(/\n\n+/).filter(p => p.trim());
+    const len = paras.reduce((s, p) => s + narratableLength(p), 0);
     if (len <= trigger) {
       out.push(ch);
       continue;
