@@ -35,7 +35,7 @@ unzip -q "$ZIP" -d "$TMP"
 BOOK_ID=$(python3 -c "import json;print(json.load(open('$TMP/book.json'))['id'])")
 TITLE=$(python3 -c "import json;print(json.load(open('$TMP/book.json'))['title'])")
 CHAPTERS=$(python3 -c "import json;print(len(json.load(open('$TMP/book.json'))['chapters']))")
-AUDIO=$(python3 -c "import json;print(sum(1 for c in json.load(open('$TMP/book.json'))['chapters'] if c.get('audioFile')))")
+AUDIO=$(python3 -c "import json;print(sum(1 for c in json.load(open('$TMP/book.json'))['chapters'] if c.get('audioFiles') or c.get('audioFile')))")
 
 echo "publishing: $TITLE (id=$BOOK_ID, chapters=$CHAPTERS, audio=$AUDIO, access=$ACCESS)"
 

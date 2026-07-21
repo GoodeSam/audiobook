@@ -23,7 +23,7 @@ import { formatTime } from './audio-timeline.js';
 import {
   listUsers, createUser,
   saveBook, getBook, listBooks, deleteBook,
-  saveChapterAudio, getBookAudio,
+  saveChapterAudio, getBookAudio, deleteChapterAudioVariant,
   saveProgress, getProgress, getLastPlayed,
   getCachedTranslation, putCachedTranslation,
 } from './db.js';
@@ -350,12 +350,18 @@ btnToggleSettings.addEventListener('click', () => {
   btnToggleSettings.textContent = settingsPanel.classList.contains('collapsed') ? 'Settings ▸' : 'Settings ▾';
 });
 
+// Shared across the settings summary and the per-chapter variant badges.
+const AUDIO_MODE_LABELS = {
+  original: 'Original', translated: 'Translated', bilingual: 'Bilingual',
+  'en-zh-en': 'EN→ZH→EN', 'en-zh-en-sentence': 'EN→ZH→EN 逐句',
+};
+const AUDIO_MODE_BADGES = {
+  original: 'EN', translated: 'ZH', bilingual: 'EN/ZH',
+  'en-zh-en': 'E-Z-E', 'en-zh-en-sentence': 'E-Z-E·',
+};
+
 function updateConfigSummary() {
-  const modeLabels = {
-    original: 'Original', translated: 'Translated', bilingual: 'Bilingual',
-    'en-zh-en': 'EN→ZH→EN', 'en-zh-en-sentence': 'EN→ZH→EN 逐句',
-  };
-  summaryMode.textContent = modeLabels[audioModeSelect.value] || 'Bilingual';
+  summaryMode.textContent = AUDIO_MODE_LABELS[audioModeSelect.value] || 'Bilingual';
   const langEl = translateLangSelect.selectedOptions[0];
   summaryLang.textContent = '→ ' + (langEl ? langEl.textContent : 'Chinese');
 }
@@ -629,9 +635,73 @@ function buildStatusLabel(ch, idx) {
 
   if (hasTrCp) return '<span class="row-status row-status-partial" role="img" aria-label="Translation in progress">Translating...</span>';
   if (hasAuCp) return '<span class="row-status row-status-partial" role="img" aria-label="Audio in progress">Generating...</span>';
-  if (hasTr && hasAudio) return '<span class="row-status row-status-done" role="img" aria-label="Complete">Ready</span>';
-  if (hasTr) return '<span class="row-status row-status-done" role="img" aria-label="Translated">Translated</span>';
-  return '<span class="row-status row-status-pending" role="img" aria-label="Not processed">Pending</span>';
+
+  const statusLabel = hasTr && hasAudio
+    ? '<span class="row-status row-status-done" role="img" aria-label="Complete">Ready</span>'
+    : hasTr
+      ? '<span class="row-status row-status-done" role="img" aria-label="Translated">Translated</span>'
+      : '<span class="row-status row-status-pending" role="img" aria-label="Not processed">Pending</span>';
+  return statusLabel + buildVariantBadges(idx);
+}
+
+/**
+ * Small badges listing every audio mode already generated for a chapter —
+ * click one to delete just that variant (arms on first click, deletes on a
+ * second click within 3s), leaving the other modes untouched.
+ */
+function buildVariantBadges(idx) {
+  const variants = state.audioVariants[idx];
+  if (!variants) return '';
+  const modes = Object.keys(variants);
+  if (modes.length === 0) return '';
+  const badges = modes.map(mode => {
+    const label = AUDIO_MODE_BADGES[mode] || mode;
+    const title = `${AUDIO_MODE_LABELS[mode] || mode} — click to remove this audio version`;
+    return `<button type="button" class="variant-badge" data-idx="${idx}" data-mode="${mode}" title="${title}">${label}</button>`;
+  });
+  return `<span class="variant-badges">${badges.join('')}</span>`;
+}
+
+/** Arm-then-confirm delete for one audio variant badge (mirrors the 🗑 pattern used elsewhere). */
+function handleVariantBadgeClick(badge) {
+  if (badge.dataset.armed) {
+    deleteAudioVariant(parseInt(badge.dataset.idx, 10), badge.dataset.mode);
+    return;
+  }
+  chapterList.querySelectorAll('.variant-badge.armed').forEach(disarmVariantBadge);
+  badge.dataset.armed = '1';
+  badge.classList.add('armed');
+  badge.textContent = '✕';
+  setTimeout(() => { if (badge.dataset.armed) disarmVariantBadge(badge); }, 3000);
+}
+
+function disarmVariantBadge(badge) {
+  delete badge.dataset.armed;
+  badge.classList.remove('armed');
+  badge.textContent = AUDIO_MODE_BADGES[badge.dataset.mode] || badge.dataset.mode;
+}
+
+/** Delete a single audio mode for a chapter, leaving any other modes intact. */
+async function deleteAudioVariant(idx, mode) {
+  if (state.audioVariants[idx]) delete state.audioVariants[idx][mode];
+  if (state.bookId) {
+    deleteChapterAudioVariant(state.bookId, idx, mode).catch(() => {/* ignore */});
+  }
+  if (state.audioModes[idx] === mode) {
+    const remaining = Object.entries(state.audioVariants[idx] || {});
+    if (remaining.length > 0) {
+      const [nextMode, data] = remaining[remaining.length - 1];
+      state.audioBlobs[idx] = data.blob;
+      state.audioTimelines[idx] = data.timeline;
+      state.audioModes[idx] = nextMode;
+    } else {
+      delete state.audioBlobs[idx];
+      delete state.audioTimelines[idx];
+      delete state.audioModes[idx];
+    }
+  }
+  updateChapterRow(idx);
+  updateBulkButtons();
 }
 
 // Event delegation for chapter list — avoids per-row listeners
@@ -639,6 +709,12 @@ chapterList.addEventListener('click', (e) => {
   const li = e.target.closest('.chapter-item');
   if (!li) return;
   const idx = parseInt(li.dataset.index);
+  const badge = e.target.closest('.variant-badge');
+  if (badge) {
+    e.stopPropagation();
+    handleVariantBadgeClick(badge);
+    return;
+  }
   if (e.target.classList.contains('chapter-cb')) {
     e.stopPropagation();
     handleCheckboxClick(idx, e.target.checked, e.shiftKey);
@@ -992,6 +1068,20 @@ btnGenerateSelected.addEventListener('click', async () => {
   await generateMultipleChapters([...state.selectedChapters].sort((a, b) => a - b));
 });
 
+/**
+ * Record a freshly-generated audio mode for a chapter without discarding
+ * any other mode already generated for it — the admin can build up several
+ * modes (original, bilingual, en-zh-en...) for the same chapter/book, all
+ * kept side by side rather than the newest one overwriting the rest.
+ */
+function recordAudioVariant(idx, mode, blob, timeline) {
+  state.audioVariants[idx] = state.audioVariants[idx] || {};
+  state.audioVariants[idx][mode] = { blob, timeline };
+  state.audioBlobs[idx] = blob;
+  state.audioTimelines[idx] = timeline;
+  state.audioModes[idx] = mode;
+}
+
 // ── Translate & Generate combined ──
 
 const btnTranslateGenerate = $('btn-translate-generate');
@@ -1066,9 +1156,7 @@ async function generateSingleChapter(idx) {
       onCheckpoint: (cpData) => { state.audioCheckpoints[idx] = cpData; },
     });
 
-    state.audioBlobs[idx] = blob;
-    state.audioTimelines[idx] = timeline;
-    state.audioModes[idx] = mode;
+    recordAudioVariant(idx, mode, blob, timeline);
     delete state.audioCheckpoints[idx]; // Clear checkpoint on success
     persistAudio(idx);
     renderChapterList();
@@ -1091,7 +1179,7 @@ async function generateMultipleChapters(indices) {
   const toTranslate = needsTranslation
     ? indices.filter(i => !state.book.chapters[i].translatedMarkdown || state.translationCheckpoints[i])
     : [];
-  const toGenerate = indices.filter(i => !state.audioBlobs[i] || state.audioCheckpoints[i]);
+  const toGenerate = indices.filter(i => !state.audioVariants[i]?.[mode] || state.audioCheckpoints[i]);
 
   // Build weighted phases
   const phases = [];
@@ -1182,9 +1270,7 @@ async function generateMultipleChapters(indices) {
             },
             onCheckpoint: (cpData) => { state.audioCheckpoints[idx] = cpData; },
           });
-          state.audioBlobs[idx] = blob;
-          state.audioTimelines[idx] = timeline;
-          state.audioModes[idx] = mode;
+          recordAudioVariant(idx, mode, blob, timeline);
           delete state.audioCheckpoints[idx];
           persistAudio(idx);
         } catch (err) {
@@ -1633,14 +1719,23 @@ function persistAudio(idx) {
   }).catch(err => console.warn('Failed to save audio to library:', err));
 }
 
-/** Load previously generated audio for a book into state. */
+/**
+ * Load previously generated audio for a book into state — every mode a
+ * chapter has, not just one. The most recently generated mode per chapter
+ * becomes the "current" one (audioBlobs/audioTimelines/audioModes), which
+ * existing single-mode UI (preview, download-all, publish default) reads.
+ */
 async function restoreBookAudio(bookId) {
   try {
     const records = await getBookAudio(bookId);
+    records.sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0));
     for (const rec of records) {
+      const mode = rec.audioMode || 'original';
+      state.audioVariants[rec.chapterIndex] = state.audioVariants[rec.chapterIndex] || {};
+      state.audioVariants[rec.chapterIndex][mode] = { blob: rec.blob, timeline: rec.timeline || null };
       state.audioBlobs[rec.chapterIndex] = rec.blob;
       if (rec.timeline) state.audioTimelines[rec.chapterIndex] = rec.timeline;
-      if (rec.audioMode) state.audioModes[rec.chapterIndex] = rec.audioMode;
+      state.audioModes[rec.chapterIndex] = mode;
     }
     if (records.length > 0) updateBulkButtons();
   } catch { /* persistence unavailable */ }
@@ -1869,6 +1964,7 @@ const player = new Player({
     btnClose: $('btn-player-close'),
     btnMode: $('btn-player-mode'),
     btnFullscreen: $('btn-player-fullscreen'),
+    btnAudioMode: $('btn-player-audio-mode'),
     seek: $('player-seek'),
     timeCur: $('player-time-cur'),
     timeTotal: $('player-time-total'),
@@ -1915,16 +2011,40 @@ function findAudioChapter(from, dir) {
 
 const fmtMB = (bytes) => (bytes / 1048576).toFixed(1);
 let _audioDownloadAbort = null;
+const AUDIO_MODE_PREF_KEY = 'audiobook.audioMode';
+
+/** Every audio mode available for a chapter, generated locally or published remotely. */
+function availableAudioModes(idx) {
+  const local = state.audioVariants[idx] ? Object.keys(state.audioVariants[idx]) : [];
+  const remote = state.remoteAudioMeta[idx]?.modes ? Object.keys(state.remoteAudioMeta[idx].modes) : [];
+  return [...new Set([...local, ...remote])];
+}
+
+/** The listener's remembered mode if this chapter has it, else whatever's first available. */
+function pickAudioMode(idx) {
+  const available = availableAudioModes(idx);
+  if (available.length === 0) return null;
+  const preferred = localStorage.getItem(AUDIO_MODE_PREF_KEY);
+  return preferred && available.includes(preferred) ? preferred : available[0];
+}
 
 /**
- * Make sure a chapter's audio blob is in memory, downloading it if remote.
- * Shows a progress dialog with streamed MB/percent (audio is stored per
- * chapter, so only the requested chapter is downloaded); once downloaded
- * it's cached in IndexedDB and plays instantly on later opens.
+ * Make sure a chapter's audio (for the given mode, or the listener's
+ * preferred/best-available one) is in memory, downloading it if remote and
+ * not already fetched. Shows a progress dialog with streamed MB/percent;
+ * once downloaded it's cached in IndexedDB and plays instantly next time.
  */
-async function ensureChapterAudio(idx) {
-  if (state.audioBlobs[idx]) return true;
-  const meta = state.remoteAudioMeta[idx];
+async function ensureChapterAudio(idx, mode) {
+  mode = mode || pickAudioMode(idx);
+  if (!mode) return false;
+  if (state.audioVariants[idx]?.[mode]) {
+    const v = state.audioVariants[idx][mode];
+    state.audioBlobs[idx] = v.blob;
+    state.audioTimelines[idx] = v.timeline;
+    state.audioModes[idx] = mode;
+    return true;
+  }
+  const meta = state.remoteAudioMeta[idx]?.modes?.[mode];
   if (!meta || !state.remoteId) return false;
   const ch = state.book.chapters[idx];
   showProgress(`⬇️ 下载本章音频: ${ch.title}`);
@@ -1942,7 +2062,7 @@ async function ensureChapterAudio(idx) {
         }
       },
     });
-    state.audioBlobs[idx] = blob;
+    recordAudioVariant(idx, mode, blob, meta.timeline || null);
     persistAudio(idx); // cache for offline replay
     if (state.activeChapter === idx) updateChapterButtons(idx);
     updateChapterRow(idx);
@@ -1953,17 +2073,28 @@ async function ensureChapterAudio(idx) {
   }
 }
 
+/** Resolve and download (if needed) one chapter's audio for a specific mode — used by the player's mode switcher. */
+async function switchPlayerAudioMode(idx, mode) {
+  const ok = await ensureChapterAudio(idx, mode);
+  if (!ok) return null;
+  localStorage.setItem(AUDIO_MODE_PREF_KEY, mode);
+  updateChapterRow(idx);
+  return {
+    blob: state.audioBlobs[idx],
+    timeline: state.audioTimelines[idx] || null,
+    label: AUDIO_MODE_BADGES[mode] || mode,
+  };
+}
+
 async function openPlayer(idx) {
-  if (!state.audioBlobs[idx]) {
-    try {
-      const ok = await ensureChapterAudio(idx);
-      if (!ok) return;
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        showToast('音频加载失败，请检查网络后重试 (' + err.message + ')', 'error');
-      }
-      return;
+  try {
+    const ok = await ensureChapterAudio(idx);
+    if (!ok) return;
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      showToast('音频加载失败，请检查网络后重试 (' + err.message + ')', 'error');
     }
+    return;
   }
   const blob = state.audioBlobs[idx];
   const ch = state.book.chapters[idx];
@@ -1980,6 +2111,7 @@ async function openPlayer(idx) {
   }
 
   playerScreen.classList.add('active');
+  const modes = availableAudioModes(idx);
   player.openChapter({
     bookTitle: state.book.title,
     chapterTitle: ch.title,
@@ -1988,6 +2120,10 @@ async function openPlayer(idx) {
     blob,
     timeline: state.audioTimelines[idx] || null,
     resumeTime,
+    availableModes: modes,
+    currentMode: state.audioModes[idx] || modes[0] || null,
+    modeLabel: AUDIO_MODE_BADGES[state.audioModes[idx]] || state.audioModes[idx] || '',
+    onSwitchMode: (mode) => switchPlayerAudioMode(idx, mode),
   });
   state.activeChapter = idx;
   renderPlayerChapterList();
@@ -2221,6 +2357,20 @@ async function renderShelf(prefetchedCatalog) {
 }
 
 /** Open an admin-published book: text immediately, audio on demand. */
+/**
+ * Normalize a fetched/cached chapter's audio metadata into
+ * { [mode]: { file, size, timeline } } — the current manifest shape is
+ * `audioFiles` (every generated mode); older published books only ever
+ * had a single `audioFile`/`audioMode`, kept working here as a fallback.
+ */
+function normalizeAudioFiles(ch) {
+  if (ch.audioFiles && Object.keys(ch.audioFiles).length > 0) return ch.audioFiles;
+  if (ch.audioFile) {
+    return { [ch.audioMode || 'original']: { file: ch.audioFile, size: ch.audioSize || 0, timeline: ch.timeline || null } };
+  }
+  return {};
+}
+
 async function openRemoteBook(entry) {
   const storageId = `remote:${entry.id}`;
   try {
@@ -2234,9 +2384,7 @@ async function openRemoteBook(entry) {
         chapters: data.chapters.map(ch => ({
           title: ch.title, markdown: ch.markdown, translatedMarkdown: ch.translatedMarkdown,
         })),
-        remoteMeta: data.chapters.map(ch => ({
-          audioFile: ch.audioFile, audioMode: ch.audioMode, timeline: ch.timeline,
-        })),
+        remoteMeta: data.chapters.map(ch => ({ audioFiles: normalizeAudioFiles(ch) })),
       }).catch(() => {});
     } catch (err) {
       // Offline fallback: use the cached copy if we have one
@@ -2246,9 +2394,7 @@ async function openRemoteBook(entry) {
         title: cached.title,
         chapters: cached.chapters.map((ch, i) => ({
           ...ch,
-          audioFile: cached.remoteMeta?.[i]?.audioFile || null,
-          audioMode: cached.remoteMeta?.[i]?.audioMode || null,
-          timeline: cached.remoteMeta?.[i]?.timeline || null,
+          audioFiles: cached.remoteMeta?.[i]?.audioFiles || {},
         })),
       };
     }
@@ -2265,10 +2411,9 @@ async function openRemoteBook(entry) {
     state.bookId = storageId;
     state.remoteId = entry.id;
     data.chapters.forEach((ch, i) => {
-      if (ch.audioFile) {
-        state.remoteAudioMeta[i] = { file: ch.audioFile, size: ch.audioSize || 0 };
-        if (ch.timeline) state.audioTimelines[i] = ch.timeline;
-        if (ch.audioMode) state.audioModes[i] = ch.audioMode;
+      const audioFiles = normalizeAudioFiles(ch);
+      if (Object.keys(audioFiles).length > 0) {
+        state.remoteAudioMeta[i] = { modes: audioFiles };
       }
     });
     _renderCache.clear();
@@ -2410,9 +2555,7 @@ async function doPublishToSite() {
   publishModalStatus.textContent = '正在打包…';
   try {
     const publishId = makePublishId(state.book.title);
-    const { blob, manifest } = await buildPublishZip(
-      state.book, publishId, state.audioBlobs, state.audioTimelines, state.audioModes
-    );
+    const { blob, manifest } = await buildPublishZip(state.book, publishId, state.audioVariants);
     publishProgressRow.hidden = false;
     publishModalStatus.textContent = `正在上传 (${(blob.size / 1024 / 1024).toFixed(1)} MB)…`;
     const result = await uploadPublishZip(token, blob, access, (frac) => {
@@ -2557,9 +2700,7 @@ btnExportPublish.addEventListener('click', async () => {
   }
   try {
     const publishId = makePublishId(state.book.title);
-    const { blob, filename, manifest } = await buildPublishZip(
-      state.book, publishId, state.audioBlobs, state.audioTimelines, state.audioModes
-    );
+    const { blob, filename, manifest } = await buildPublishZip(state.book, publishId, state.audioVariants);
     downloadBlob(blob, filename);
     showToast(
       `Publish package ready (${countAudioChapters(manifest)} audio chapters). ` +

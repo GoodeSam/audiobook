@@ -260,7 +260,10 @@ class Handler(BaseHTTPRequestHandler):
                 "id": book_id,
                 "title": manifest.get("title") or book_id,
                 "chapterCount": len(chapters),
-                "audioCount": sum(1 for c in chapters if c.get("audioFile")),
+                # audioFiles (mode -> {file, size, timeline}) is the current
+                # multi-mode manifest shape; audioFile is the older single-mode
+                # one, kept here so already-published books still count right.
+                "audioCount": sum(1 for c in chapters if c.get("audioFiles") or c.get("audioFile")),
                 "access": access,
                 "updatedAt": int(time.time() * 1000),
             }

@@ -12,7 +12,7 @@
  */
 
 const DB_NAME = 'audiobook-app';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let _dbPromise = null;
 
@@ -24,7 +24,7 @@ export function openDatabase() {
       return;
     }
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result;
       if (!db.objectStoreNames.contains('users')) {
         db.createObjectStore('users', { keyPath: 'id' });
@@ -32,9 +32,17 @@ export function openDatabase() {
       if (!db.objectStoreNames.contains('books')) {
         db.createObjectStore('books', { keyPath: 'id' });
       }
+      if (db.objectStoreNames.contains('audio') && event.oldVersion < 3) {
+        // v3: one record per (book, chapter, audioMode) instead of one per
+        // (book, chapter), so multiple audio modes can coexist rather than
+        // overwriting each other. Keys can't change in place — audio is
+        // regeneratable, so just drop and recreate.
+        db.deleteObjectStore('audio');
+      }
       if (!db.objectStoreNames.contains('audio')) {
-        const s = db.createObjectStore('audio', { keyPath: ['bookId', 'chapterIndex'] });
+        const s = db.createObjectStore('audio', { keyPath: ['bookId', 'chapterIndex', 'audioMode'] });
         s.createIndex('bookId', 'bookId');
+        s.createIndex('bookId_chapterIndex', ['bookId', 'chapterIndex']);
       }
       if (!db.objectStoreNames.contains('progress')) {
         const s = db.createObjectStore('progress', { keyPath: ['userId', 'bookId', 'chapterIndex'] });
@@ -134,19 +142,29 @@ export async function deleteBook(bookId) {
 }
 
 // ── Audio ──
+// Multiple audio modes (original, bilingual, en-zh-en, ...) can coexist for
+// the same chapter — each is a distinct record keyed by
+// [bookId, chapterIndex, audioMode] rather than overwriting one another.
 
 export async function saveChapterAudio(bookId, chapterIndex, { blob, timeline, audioMode }) {
   const db = await openDatabase();
   await tx(db, 'audio', 'readwrite', s => s.put({
-    bookId, chapterIndex, blob, timeline: timeline || null, audioMode: audioMode || null,
+    bookId, chapterIndex, blob, timeline: timeline || null, audioMode: audioMode || 'original',
     updatedAt: Date.now(),
   }));
 }
 
+/** Every generated audio record (all chapters, all modes) for a book. */
 export async function getBookAudio(bookId) {
   const db = await openDatabase();
   const idx = db.transaction('audio').objectStore('audio').index('bookId');
   return reqToPromise(idx.getAll(bookId));
+}
+
+/** Remove one chapter's audio for a single mode, leaving other modes intact. */
+export async function deleteChapterAudioVariant(bookId, chapterIndex, audioMode) {
+  const db = await openDatabase();
+  await tx(db, 'audio', 'readwrite', s => s.delete([bookId, chapterIndex, audioMode || 'original']));
 }
 
 // ── Listening progress ──

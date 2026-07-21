@@ -15,9 +15,10 @@ export function createAppState() {
   return {
     book: null,
     bookId: null,           // stable id for library persistence (derived from title)
-    audioBlobs: {},
-    audioTimelines: {},     // chapterIndex -> timeline array (see audio-timeline.js)
-    audioModes: {},         // chapterIndex -> audio mode the MP3 was generated with
+    audioBlobs: {},         // chapterIndex -> Blob for the current/last-generated mode
+    audioTimelines: {},     // chapterIndex -> timeline array for the current mode (see audio-timeline.js)
+    audioModes: {},         // chapterIndex -> audio mode the current MP3 was generated with
+    audioVariants: {},      // chapterIndex -> { [audioMode]: { blob, timeline } } — every generated mode, not just the current one
     remoteId: null,         // remote-library book id when opened from the shelf
     remoteAudioMeta: {},    // chapterIndex -> { file } for audio not yet downloaded
     activeChapter: null,
@@ -43,6 +44,7 @@ export function resetStateForNewBook(state, book) {
   state.audioBlobs = {};
   state.audioTimelines = {};
   state.audioModes = {};
+  state.audioVariants = {};
   state.remoteId = null;
   state.remoteAudioMeta = {};
   state.activeChapter = null;

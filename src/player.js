@@ -40,6 +40,7 @@ export class Player {
     this.onSaveProgress = onSaveProgress || (() => {});
     this.onRequestChapter = onRequestChapter || (() => {});
     this.onClose = onClose || (() => {});
+    this.onSwitchMode = () => Promise.resolve(null);
 
     this.audio = new Audio();
     this.audio.preload = 'auto';
@@ -57,6 +58,9 @@ export class Player {
     this._flatSentences = [];
     this._viewMode = localStorage.getItem(VIEW_MODE_KEY) === 'subtitle' ? 'subtitle' : 'full';
     this._immersive = localStorage.getItem(IMMERSIVE_KEY) === '1';
+    this._availableModes = [];
+    this._currentMode = null;
+    this._switchingMode = false;
 
     this._bindEvents();
     this._applyViewMode();
@@ -75,6 +79,7 @@ export class Player {
     el.btnClose.addEventListener('click', () => this.close());
     el.btnMode.addEventListener('click', () => this._toggleViewMode());
     el.btnFullscreen.addEventListener('click', () => this._toggleImmersive());
+    el.btnAudioMode.addEventListener('click', () => this._cycleAudioMode());
 
     // Tapping the reading area while in fullscreen brings the controls back.
     const exitImmersiveOnTap = () => { if (this._immersive) this._toggleImmersive(); };
@@ -131,8 +136,15 @@ export class Player {
    * @param {Array|null} opts.timeline
    * @param {number} [opts.resumeTime=0]
    * @param {boolean} [opts.autoplay=true]
+   * @param {string[]} [opts.availableModes] - Audio modes this chapter has (local or remote).
+   * @param {string|null} [opts.currentMode] - Which mode `blob` is.
+   * @param {string} [opts.modeLabel] - Short display label for `currentMode`.
+   * @param {Function} [opts.onSwitchMode] - (mode) => Promise<{blob, timeline, label}|null>.
    */
-  openChapter({ bookTitle, chapterTitle, chapterIndex, originalText, blob, timeline, resumeTime = 0, autoplay = true }) {
+  openChapter({
+    bookTitle, chapterTitle, chapterIndex, originalText, blob, timeline, resumeTime = 0, autoplay = true,
+    availableModes = [], currentMode = null, modeLabel = '', onSwitchMode,
+  }) {
     this._saveProgressIfOpen();
     this._cleanupUrl();
 
@@ -141,6 +153,10 @@ export class Player {
     this._activeEntry = -1;
     this._activeSentence = -1;
     this._lastSave = Date.now();
+    this._availableModes = availableModes;
+    this._currentMode = currentMode;
+    this.onSwitchMode = onSwitchMode || (() => Promise.resolve(null));
+    this._applyAudioModeButton(modeLabel);
 
     this.el.bookTitle.textContent = bookTitle;
     this.el.chapterTitle.textContent = chapterTitle;
@@ -394,6 +410,59 @@ export class Player {
     subtitlePrev.textContent = prev ? prev.textContent : '';
     subtitleCurrent.textContent = currentSpan.textContent;
     subtitleNext.textContent = next ? next.textContent : '';
+  }
+
+  // ── Audio mode switching (original / bilingual / EN→ZH→EN...) ──
+
+  _applyAudioModeButton(label) {
+    const btn = this.el.btnAudioMode;
+    const hasChoice = this._availableModes.length > 1;
+    btn.style.display = hasChoice ? '' : 'none';
+    btn.textContent = label || '';
+    btn.title = hasChoice ? `Audio: ${label} — tap to switch` : '';
+  }
+
+  /**
+   * Cycle to the next available audio mode for the current chapter,
+   * downloading it if needed (host handles that via onSwitchMode), then
+   * swap the audio source in place — preserving playback position and
+   * play/pause state, so switching mid-sentence doesn't restart the chapter.
+   */
+  async _cycleAudioMode() {
+    if (this._switchingMode || this._availableModes.length <= 1 || this.chapterIndex === null) return;
+    const curIdx = this._availableModes.indexOf(this._currentMode);
+    const nextMode = this._availableModes[(curIdx + 1) % this._availableModes.length];
+    const resumeTime = this.audio.currentTime;
+    const wasPlaying = !this.audio.paused;
+    const prevLabel = this.el.btnAudioMode.textContent;
+
+    this._switchingMode = true;
+    this.el.btnAudioMode.textContent = '…';
+    try {
+      const result = await this.onSwitchMode(nextMode);
+      if (!result || this.chapterIndex === null) {
+        this.el.btnAudioMode.textContent = prevLabel;
+        return;
+      }
+      this.audio.pause();
+      this._cleanupUrl();
+      this._url = URL.createObjectURL(result.blob);
+      this.audio.src = this._url;
+      this.timeline = result.timeline || null;
+      this._activeEntry = -1;
+      this._activeSentence = -1;
+      this._currentMode = nextMode;
+      this._applyAudioModeButton(result.label ?? prevLabel);
+
+      const resume = () => {
+        this.audio.currentTime = resumeTime;
+        if (wasPlaying) this.audio.play().catch(() => {/* autoplay blocked */});
+      };
+      if (this.audio.readyState >= 1) resume();
+      else this.audio.addEventListener('loadedmetadata', resume, { once: true });
+    } finally {
+      this._switchingMode = false;
+    }
   }
 
   // ── Progress persistence ──

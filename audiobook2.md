@@ -2,6 +2,7 @@
 vmark:
   id: 019f7fbe-4c93-7931-a741-674dedd66b47
 ---
+
 对这个audiobook进行全面升级，使其可以是一个在手机上使用的APP，
 
 我把想听的书上传上去以后，按照目前的选择生成翻译和音频。
@@ -184,10 +185,10 @@ Ran 2 shell commands
 
 ---
 
-
-
 我用本系统生成了 ''/Users/victor/Desktop/books/动物/The Heron and the Hummingbird (Rachel Bladon) ([z-library.sk](http://z-library.sk), [1lib.sk](http://1lib.sk), [z-lib.sk](http://z-lib.sk)).pdf'' 这本书的内容，发现系统把fly 这个单词分隔成了 “fl” 和”y“两个单词，把fish分隔成了fi和sh两个单词。同时，还有的时候，字幕和语音对应的时间不匹配的问题，解决这两个问题
 
 ---
+
+同一本书产生了翻译和获得了音频以后，后续还可以选择可以选择产生多种音频方式，比如只有英语音频的，还是一遍英语一遍汉语音频的，以及一遍英语一遍汉语一遍英语音频的，然后其他的音频方式也可以上传到audiobook。tumei。online上面
 
 让codex对本系统进行两轮评估和修改

@@ -26,51 +26,65 @@ function stripImages(markdown) {
     .trim();
 }
 
+/** Filename for one chapter's audio in a given mode, e.g. "003-bilingual.mp3". */
+function audioFilename(idx, mode) {
+  return `${String(idx + 1).padStart(3, '0')}-${mode}.mp3`;
+}
+
 /**
  * Build the book.json manifest for publishing.
  * Pure function — testable without blobs.
  *
+ * A chapter can have several audio modes generated for it (original,
+ * bilingual, en-zh-en...) — all of them are published side by side so
+ * listeners can pick which one to hear, instead of only the most recently
+ * generated mode surviving.
+ *
  * @param {object} book - { title, chapters: [{title, markdown, translatedMarkdown}] }
  * @param {string} bookId
- * @param {object} audioBlobs - chapterIndex -> Blob
- * @param {object} audioTimelines - chapterIndex -> timeline array
- * @param {object} audioModes - chapterIndex -> audio mode string
- * @returns {object} manifest with chapters[].audioFile set for chapters that have audio
+ * @param {object} audioVariants - chapterIndex -> { [mode]: { blob, timeline } }
+ * @returns {object} manifest with chapters[].audioFiles = { mode: { file, size, timeline } }
  */
-export function buildPublishManifest(book, bookId, audioBlobs, audioTimelines = {}, audioModes = {}) {
+export function buildPublishManifest(book, bookId, audioVariants = {}) {
   return {
     id: bookId,
     title: book.title,
     generatedAt: Date.now(),
-    chapters: book.chapters.map((ch, idx) => ({
-      title: ch.title,
-      markdown: stripImages(ch.markdown),
-      translatedMarkdown: ch.translatedMarkdown ? stripImages(ch.translatedMarkdown) : null,
-      audioFile: audioBlobs[idx] ? `${String(idx + 1).padStart(3, '0')}.mp3` : null,
-      audioSize: audioBlobs[idx] ? (audioBlobs[idx].size || 0) : null,
-      audioMode: audioBlobs[idx] ? (audioModes[idx] || null) : null,
-      timeline: audioBlobs[idx] ? (audioTimelines[idx] || null) : null,
-    })),
+    chapters: book.chapters.map((ch, idx) => {
+      const variants = audioVariants[idx] || {};
+      const audioFiles = {};
+      for (const [mode, { blob, timeline }] of Object.entries(variants)) {
+        if (!blob) continue;
+        audioFiles[mode] = { file: audioFilename(idx, mode), size: blob.size || 0, timeline: timeline || null };
+      }
+      return {
+        title: ch.title,
+        markdown: stripImages(ch.markdown),
+        translatedMarkdown: ch.translatedMarkdown ? stripImages(ch.translatedMarkdown) : null,
+        audioFiles,
+      };
+    }),
   };
 }
 
-/** How many chapters in a manifest have audio. */
+/** How many chapters in a manifest have at least one audio mode. */
 export function countAudioChapters(manifest) {
-  return manifest.chapters.filter(ch => ch.audioFile).length;
+  return manifest.chapters.filter(ch => Object.keys(ch.audioFiles || {}).length > 0).length;
 }
 
 /**
- * Build the publish ZIP: book.json + NNN.mp3 files.
+ * Build the publish ZIP: book.json + one MP3 per (chapter, generated mode).
  * @returns {Promise<{blob: Blob, filename: string, manifest: object}>}
  */
-export async function buildPublishZip(book, bookId, audioBlobs, audioTimelines, audioModes) {
-  const manifest = buildPublishManifest(book, bookId, audioBlobs, audioTimelines, audioModes);
+export async function buildPublishZip(book, bookId, audioVariants) {
+  const manifest = buildPublishManifest(book, bookId, audioVariants);
   const JSZip = (await import('jszip')).default;
   const zip = new JSZip();
   zip.file('book.json', JSON.stringify(manifest));
   for (let idx = 0; idx < book.chapters.length; idx++) {
-    if (audioBlobs[idx]) {
-      zip.file(`${String(idx + 1).padStart(3, '0')}.mp3`, audioBlobs[idx]);
+    const variants = audioVariants[idx] || {};
+    for (const [mode, { blob }] of Object.entries(variants)) {
+      if (blob) zip.file(audioFilename(idx, mode), blob);
     }
   }
   const blob = await zip.generateAsync({ type: 'blob' });

@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { visibleBooks, isKnownCode } from './remote-library.js';
-import { buildPublishManifest, countAudioChapters } from './publish-export.js';
 
 const catalog = {
   books: [
@@ -60,41 +59,6 @@ describe('isKnownCode', () => {
   });
 });
 
-describe('buildPublishManifest', () => {
-  const book = {
-    title: 'My Book',
-    chapters: [
-      { title: 'One', markdown: 'Text one.', translatedMarkdown: '译文一。' },
-      { title: 'Two', markdown: 'Text two.', translatedMarkdown: null },
-    ],
-  };
-  const blobs = { 0: new Blob(['x']) };
-  const timelines = { 0: [{ start: 0, end: 1, lang: 'en', paraIndex: 0, text: 'Text one.' }] };
-  const modes = { 0: 'bilingual' };
-
-  it('sets audioFile only for chapters with audio', () => {
-    const m = buildPublishManifest(book, 'my-book', blobs, timelines, modes);
-    expect(m.id).toBe('my-book');
-    expect(m.chapters[0].audioFile).toBe('001.mp3');
-    expect(m.chapters[0].audioMode).toBe('bilingual');
-    expect(m.chapters[0].timeline.length).toBe(1);
-    expect(m.chapters[1].audioFile).toBeNull();
-    expect(m.chapters[1].timeline).toBeNull();
-  });
-
-  it('preserves markdown and translations', () => {
-    const m = buildPublishManifest(book, 'my-book', blobs);
-    expect(m.chapters[0].markdown).toBe('Text one.');
-    expect(m.chapters[0].translatedMarkdown).toBe('译文一。');
-    expect(m.chapters[1].translatedMarkdown).toBeNull();
-  });
-
-  it('counts audio chapters', () => {
-    const m = buildPublishManifest(book, 'my-book', blobs);
-    expect(countAudioChapters(m)).toBe(1);
-  });
-});
-
 describe('fetchRemoteAudio download progress', () => {
   function mockStreamResponse(chunks, contentLength) {
     let i = 0;
@@ -139,15 +103,5 @@ describe('fetchRemoteAudio download progress', () => {
     } finally {
       globalThis.fetch = orig;
     }
-  });
-});
-
-describe('buildPublishManifest audio sizes', () => {
-  it('records each chapter audio blob size for download progress display', () => {
-    const book = { title: 'T', chapters: [{ title: 'c1', markdown: 'a' }, { title: 'c2', markdown: 'b' }] };
-    const blobs = { 0: new Blob([new Uint8Array(2048)]) };
-    const m = buildPublishManifest(book, 'id-t', blobs);
-    expect(m.chapters[0].audioSize).toBe(2048);
-    expect(m.chapters[1].audioSize).toBe(null);
   });
 });

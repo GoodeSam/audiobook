@@ -16,7 +16,7 @@ describe('buildPublishManifest', () => {
     expect(manifest.chapters[0].translatedMarkdown).toBe('你好世界。');
   });
 
-  it('marks audioFile/audioSize/audioMode only for chapters with audio', () => {
+  it('lists every generated mode under audioFiles, with distinct filenames', () => {
     const book = {
       title: 'Book',
       chapters: [
@@ -24,14 +24,27 @@ describe('buildPublishManifest', () => {
         { title: 'Ch2', markdown: 'B' },
       ],
     };
-    const audioBlobs = { 0: { size: 12345 } };
-    const audioModes = { 0: 'original' };
-    const manifest = buildPublishManifest(book, 'book', audioBlobs, {}, audioModes);
-    expect(manifest.chapters[0].audioFile).toBe('001.mp3');
-    expect(manifest.chapters[0].audioSize).toBe(12345);
-    expect(manifest.chapters[0].audioMode).toBe('original');
-    expect(manifest.chapters[1].audioFile).toBeNull();
-    expect(manifest.chapters[1].audioSize).toBeNull();
+    const audioVariants = {
+      0: {
+        original: { blob: { size: 1000 }, timeline: [{ start: 0, end: 1 }] },
+        bilingual: { blob: { size: 2000 }, timeline: null },
+      },
+    };
+    const manifest = buildPublishManifest(book, 'book', audioVariants);
+    expect(manifest.chapters[0].audioFiles.original).toEqual({
+      file: '001-original.mp3', size: 1000, timeline: [{ start: 0, end: 1 }],
+    });
+    expect(manifest.chapters[0].audioFiles.bilingual).toEqual({
+      file: '001-bilingual.mp3', size: 2000, timeline: null,
+    });
+    // Chapter with no generated audio gets an empty map, not null/undefined
+    expect(manifest.chapters[1].audioFiles).toEqual({});
+  });
+
+  it('defaults audioVariants to empty when omitted', () => {
+    const book = { title: 'Book', chapters: [{ title: 'Ch1', markdown: 'A' }] };
+    const manifest = buildPublishManifest(book, 'book');
+    expect(manifest.chapters[0].audioFiles).toEqual({});
   });
 
   it('strips embedded images from markdown and translatedMarkdown', () => {
@@ -71,19 +84,19 @@ describe('buildPublishManifest', () => {
 });
 
 describe('countAudioChapters', () => {
-  it('counts only chapters with audioFile set', () => {
+  it('counts only chapters with at least one audio mode', () => {
     const manifest = {
       chapters: [
-        { audioFile: '001.mp3' },
-        { audioFile: null },
-        { audioFile: '003.mp3' },
+        { audioFiles: { original: { file: '001-original.mp3' } } },
+        { audioFiles: {} },
+        { audioFiles: { bilingual: { file: '003-bilingual.mp3' }, original: { file: '003-original.mp3' } } },
       ],
     };
     expect(countAudioChapters(manifest)).toBe(2);
   });
 
   it('returns 0 for a manifest with no audio', () => {
-    const manifest = { chapters: [{ audioFile: null }, { audioFile: null }] };
+    const manifest = { chapters: [{ audioFiles: {} }, { audioFiles: {} }] };
     expect(countAudioChapters(manifest)).toBe(0);
   });
 });

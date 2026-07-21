@@ -556,6 +556,33 @@ body {
   color: #e65100;
 }
 
+.variant-badges {
+  display: inline-flex;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+.variant-badge {
+  font-size: 0.62rem;
+  font-family: inherit;
+  padding: 0.08rem 0.3rem;
+  border-radius: 3px;
+  white-space: nowrap;
+  background: var(--sidebar-bg);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  line-height: 1.3;
+}
+.variant-badge:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.variant-badge.armed {
+  background: #ffebee;
+  color: #c62828;
+  border-color: #c62828;
+}
+
 .chapter-item .chapter-name {
   flex: 1;
   overflow: hidden;
@@ -790,7 +817,10 @@ body {
   display: none;
   align-items: center;
   justify-content: center;
-  z-index: 100;
+  /* Above the player screen (200) and its chapter drawer (210) — a
+     download prompt (e.g. switching audio mode mid-playback) must stay
+     visible even when the player is the active full-screen view. */
+  z-index: 300;
 }
 .progress-overlay.visible {
   display: flex;
@@ -1242,6 +1272,17 @@ body {
 
 .player-icon-btn:hover {
   background: var(--code-bg);
+}
+
+.player-audio-mode-btn {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 999px;
+  width: auto;
+  min-width: 2.2rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
 }
 
 .player-play-btn {
