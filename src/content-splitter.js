@@ -67,9 +67,13 @@ export function splitIntoParts(chapters, options = {}) {
   // Try chapter-based splitting first if enough chapters
   if (chapters.length >= minParts) {
     const chapterParts = buildChapterParts(chapters, allParas);
-    const chapterSizes = chapterParts.map(p => p.paragraphs.reduce((s, t) => s + narratableLength(t), 0));
-    if (calculateVariance(chapterSizes) <= MAX_VARIANCE) {
-      return chapterParts;
+    // buildChapterParts drops empty chapters, so it can produce fewer than
+    // minParts even when `chapters.length >= minParts` — don't accept that.
+    if (chapterParts.length >= minParts) {
+      const chapterSizes = chapterParts.map(p => p.paragraphs.reduce((s, t) => s + narratableLength(t), 0));
+      if (calculateVariance(chapterSizes) <= MAX_VARIANCE) {
+        return chapterParts;
+      }
     }
   }
 

@@ -246,10 +246,10 @@ class Handler(BaseHTTPRequestHandler):
 
                 # Extract into a staging directory first — a mid-extraction
                 # failure (bad member, disk full, crash) must never destroy
-                # the book that's already live.
-                staging = os.path.join(LIB, "." + book_id + ".staging")
-                shutil.rmtree(staging, ignore_errors=True)
-                os.makedirs(staging, exist_ok=True)
+                # the book that's already live. Unique per request (not just
+                # per book id) so two concurrent publishes of the same book
+                # can't extract into — and corrupt — the same directory.
+                staging = tempfile.mkdtemp(prefix="." + book_id + ".staging-", dir=LIB)
                 for name in names:
                     with zf.open(name) as src, open(os.path.join(staging, name), "wb") as out:
                         shutil.copyfileobj(src, out)

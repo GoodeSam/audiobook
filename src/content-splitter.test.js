@@ -65,6 +65,19 @@ describe('splitIntoParts', () => {
       const variance = calculateVariance(sizes);
       expect(variance).toBeLessThanOrEqual(0.10);
     });
+
+    it('falls through to paragraph splitting when empty chapters leave chapter-based splitting under minParts', () => {
+      // 12 chapters ≥ minParts, but 4 are empty — chapter-based splitting
+      // would drop them and return only 8 (evenly-sized, so low variance),
+      // silently violating the "at least minParts" contract.
+      const structure = [
+        [], [], [], [],
+        ...Array(8).fill([50, 50]), // 8 non-empty chapters × 2 paragraphs = 16 paragraphs total
+      ];
+      const chapters = makeChapters(structure);
+      const parts = splitIntoParts(chapters);
+      expect(parts.length).toBeGreaterThanOrEqual(10);
+    });
   });
 
   describe('with fewer than 10 chapters', () => {

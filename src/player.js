@@ -155,6 +155,7 @@ export class Player {
     this._lastSave = Date.now();
     this._availableModes = availableModes;
     this._currentMode = currentMode;
+    this._switchingMode = false; // don't let a stale in-flight switch from the previous chapter block this one
     this.onSwitchMode = onSwitchMode || (() => Promise.resolve(null));
     this._applyAudioModeButton(modeLabel);
 
@@ -430,6 +431,7 @@ export class Player {
    */
   async _cycleAudioMode() {
     if (this._switchingMode || this._availableModes.length <= 1 || this.chapterIndex === null) return;
+    const requestChapterIndex = this.chapterIndex;
     const curIdx = this._availableModes.indexOf(this._currentMode);
     const nextMode = this._availableModes[(curIdx + 1) % this._availableModes.length];
     const resumeTime = this.audio.currentTime;
@@ -440,8 +442,11 @@ export class Player {
     this.el.btnAudioMode.textContent = '…';
     try {
       const result = await this.onSwitchMode(nextMode);
-      if (!result || this.chapterIndex === null) {
-        this.el.btnAudioMode.textContent = prevLabel;
+      // The player may have moved to a different chapter while this mode
+      // download was in flight — discard a now-stale result rather than
+      // overwriting whatever chapter is actually open.
+      if (!result || this.chapterIndex !== requestChapterIndex) {
+        if (this.chapterIndex === requestChapterIndex) this.el.btnAudioMode.textContent = prevLabel;
         return;
       }
       this.audio.pause();

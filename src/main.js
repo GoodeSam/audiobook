@@ -1058,8 +1058,10 @@ function sentenceModeTranslator() {
 
 btnGenerateChapter.addEventListener('click', async () => {
   if (state.activeChapter === null || state.generating) return;
-  // Skip if already fully generated (no checkpoint means complete)
-  if (state.audioBlobs[state.activeChapter] && !state.audioCheckpoints[state.activeChapter]) return;
+  // Skip if the SELECTED mode is already generated (no checkpoint means complete) —
+  // checking audioBlobs alone would block generating a second mode for this chapter.
+  const alreadyHasMode = !!state.audioVariants[state.activeChapter]?.[audioModeSelect.value];
+  if (alreadyHasMode && !state.audioCheckpoints[state.activeChapter]) return;
   await generateSingleChapter(state.activeChapter);
 });
 
@@ -1286,6 +1288,7 @@ async function generateMultipleChapters(indices) {
 
     if (failures.length > 0) {
       const summary = failures.map(f => `${f.chapter} (${f.phase}): ${f.error}`).join('\n');
+      console.warn('Chapter processing failures:\n' + summary);
       showToast(`${failures.length} chapter(s) had errors`, 'error', 8000);
     }
   } catch (err) {
@@ -1734,7 +1737,7 @@ async function restoreBookAudio(bookId) {
       state.audioVariants[rec.chapterIndex] = state.audioVariants[rec.chapterIndex] || {};
       state.audioVariants[rec.chapterIndex][mode] = { blob: rec.blob, timeline: rec.timeline || null };
       state.audioBlobs[rec.chapterIndex] = rec.blob;
-      if (rec.timeline) state.audioTimelines[rec.chapterIndex] = rec.timeline;
+      state.audioTimelines[rec.chapterIndex] = rec.timeline || null;
       state.audioModes[rec.chapterIndex] = mode;
     }
     if (records.length > 0) updateBulkButtons();

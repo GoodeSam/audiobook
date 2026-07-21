@@ -42,10 +42,17 @@ echo "publishing: $TITLE (id=$BOOK_ID, chapters=$CHAPTERS, audio=$AUDIO, access=
 ssh -i "$KEY" -o StrictHostKeyChecking=accept-new "$HOST" "mkdir -p '$LIB/$BOOK_ID'"
 rsync -az --delete --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r -e "ssh -i $KEY" "$TMP/" "$HOST:$LIB/$BOOK_ID/"
 
+# Base64-encode the title before it crosses the SSH command boundary — a
+# title containing an apostrophe (very common: "Charlotte's Web") would
+# otherwise close the single-quoted shell argument early and break the
+# remote command.
+TITLE_B64=$(printf '%s' "$TITLE" | base64 | tr -d '\n')
+
 # Upsert the book into catalog.json on the server
-ssh -i "$KEY" "$HOST" "python3 - '$BOOK_ID' '$TITLE' '$CHAPTERS' '$AUDIO' '$ACCESS' <<'PYEOF'
-import json, os, sys, time
-book_id, title, chapters, audio, access = sys.argv[1:6]
+ssh -i "$KEY" "$HOST" "python3 - '$BOOK_ID' '$TITLE_B64' '$CHAPTERS' '$AUDIO' '$ACCESS' <<'PYEOF'
+import base64, json, os, sys, time
+book_id, title_b64, chapters, audio, access = sys.argv[1:6]
+title = base64.b64decode(title_b64).decode('utf-8')
 path = '$LIB/catalog.json'
 catalog = {'books': []}
 if os.path.exists(path):
