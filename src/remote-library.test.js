@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { visibleBooks, isKnownCode } from './remote-library.js';
+import { visibleBooks, isKnownCode, fetchRemoteTimeline } from './remote-library.js';
 
 const catalog = {
   books: [
@@ -100,6 +100,47 @@ describe('fetchRemoteAudio download progress', () => {
       const { fetchRemoteAudio } = await import('./remote-library.js');
       const blob = await fetchRemoteAudio('book-x', '001.mp3');
       expect(blob.size).toBe(10);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+});
+
+describe('fetchRemoteTimeline', () => {
+  it('returns null immediately without fetching when no filename is given', async () => {
+    const orig = globalThis.fetch;
+    let called = false;
+    globalThis.fetch = async () => { called = true; };
+    try {
+      const result = await fetchRemoteTimeline('book-x', null);
+      expect(result).toBeNull();
+      expect(called).toBe(false);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it('fetches and parses the timeline JSON when a filename is given', async () => {
+    const orig = globalThis.fetch;
+    const timeline = [{ start: 0, end: 1, text: 'Hello.' }];
+    globalThis.fetch = async (url) => {
+      expect(url).toContain('001-original.timeline.json');
+      return { ok: true, json: async () => timeline };
+    };
+    try {
+      const result = await fetchRemoteTimeline('book-x', '001-original.timeline.json');
+      expect(result).toEqual(timeline);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it('returns null (not a throw) when the sidecar file is missing — older published books never had one', async () => {
+    const orig = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: false, status: 404 });
+    try {
+      const result = await fetchRemoteTimeline('book-x', '001-original.timeline.json');
+      expect(result).toBeNull();
     } finally {
       globalThis.fetch = orig;
     }

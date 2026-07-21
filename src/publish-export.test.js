@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildPublishManifest, countAudioChapters } from './publish-export.js';
+import { buildPublishManifest, countAudioChapters, buildPublishZip } from './publish-export.js';
 
 describe('buildPublishManifest', () => {
   it('builds a manifest with title, id, and chapters', () => {
@@ -31,14 +31,19 @@ describe('buildPublishManifest', () => {
       },
     };
     const manifest = buildPublishManifest(book, 'book', audioVariants);
+    // Timelines are NOT embedded in the manifest (that's the whole point —
+    // dense books can have megabytes of timing data, which every listener
+    // would otherwise download just to browse chapter titles). Only a
+    // pointer to the sidecar file that carries it, fetched lazily later.
     expect(manifest.chapters[0].audioFiles.original).toEqual({
-      file: '001-original.mp3', size: 1000, timeline: [{ start: 0, end: 1 }],
+      file: '001-original.mp3', size: 1000, timelineFile: '001-original.timeline.json',
     });
     expect(manifest.chapters[0].audioFiles.bilingual).toEqual({
-      file: '001-bilingual.mp3', size: 2000, timeline: null,
+      file: '001-bilingual.mp3', size: 2000, timelineFile: null,
     });
     // Chapter with no generated audio gets an empty map, not null/undefined
     expect(manifest.chapters[1].audioFiles).toEqual({});
+    expect(JSON.stringify(manifest)).not.toContain('"start"'); // no raw timeline data leaked into the manifest
   });
 
   it('defaults audioVariants to empty when omitted', () => {
@@ -80,6 +85,35 @@ describe('buildPublishManifest', () => {
     };
     const manifest = buildPublishManifest(book, 'cover', {});
     expect(manifest.chapters[0].markdown).toBe('');
+  });
+});
+
+describe('buildPublishZip', () => {
+  it('packs a timeline sidecar file alongside the mp3 when a timeline exists', async () => {
+    const book = { title: 'Book', chapters: [{ title: 'Ch1', markdown: 'A' }] };
+    const timeline = [{ start: 0, end: 1, text: 'A' }];
+    const audioVariants = { 0: { original: { blob: new Blob(['fake-mp3']), timeline } } };
+    const { blob, manifest } = await buildPublishZip(book, 'book', audioVariants);
+
+    expect(manifest.chapters[0].audioFiles.original.timelineFile).toBe('001-original.timeline.json');
+
+    const JSZip = (await import('jszip')).default;
+    const zip = await JSZip.loadAsync(blob);
+    expect(Object.keys(zip.files).sort()).toEqual([
+      '001-original.mp3', '001-original.timeline.json', 'book.json',
+    ]);
+    const packedTimeline = JSON.parse(await zip.file('001-original.timeline.json').async('text'));
+    expect(packedTimeline).toEqual(timeline);
+  });
+
+  it('omits the sidecar file when a mode has no timeline', async () => {
+    const book = { title: 'Book', chapters: [{ title: 'Ch1', markdown: 'A' }] };
+    const audioVariants = { 0: { translated: { blob: new Blob(['fake-mp3']), timeline: null } } };
+    const { blob } = await buildPublishZip(book, 'book', audioVariants);
+
+    const JSZip = (await import('jszip')).default;
+    const zip = await JSZip.loadAsync(blob);
+    expect(Object.keys(zip.files).sort()).toEqual(['001-translated.mp3', 'book.json']);
   });
 });
 

@@ -6,8 +6,14 @@
  *                                             access, updatedAt}] }
  *   library/<bookId>/book.json            → { id, title, chapters: [{title,
  *                                             markdown, translatedMarkdown,
- *                                             audioFile, audioMode, timeline}] }
- *   library/<bookId>/NNN.mp3              → per-chapter audio
+ *                                             audioFiles: {mode: {file, size,
+ *                                             timelineFile}}}] }
+ *   library/<bookId>/NNN-mode.mp3          → per-chapter, per-mode audio
+ *   library/<bookId>/NNN-mode.timeline.json → that chapter/mode's playback
+ *                                             timeline, fetched lazily (not
+ *                                             embedded in book.json — dense
+ *                                             books can have several MB of
+ *                                             timing data across chapters)
  *
  * `access` is either the string "public" or an array of access codes.
  * Users log in with an access code assigned by the admin (WeChat tumei321123);
@@ -61,9 +67,30 @@ export async function fetchCatalog(baseUrl = '') {
   return res.json();
 }
 
-export async function fetchRemoteBook(bookId, baseUrl = '') {
-  const res = await fetch(`${baseUrl}${LIBRARY_PATH}/${encodeURIComponent(bookId)}/book.json`, { cache: 'no-store' });
+export async function fetchRemoteBook(bookId, baseUrl = '', opts = {}) {
+  const { signal } = opts;
+  const res = await fetch(
+    `${baseUrl}${LIBRARY_PATH}/${encodeURIComponent(bookId)}/book.json`,
+    { cache: 'no-store', ...(signal ? { signal } : {}) }
+  );
   if (!res.ok) throw new Error(`Book unavailable (${res.status})`);
+  return res.json();
+}
+
+/**
+ * Fetch one chapter/mode's playback timeline. Returns null (not an error)
+ * when the file is missing — older published books embedded the timeline
+ * directly in book.json instead of publishing a sidecar file, and a mode
+ * with no timeline (e.g. translated-only) never had one to begin with.
+ */
+export async function fetchRemoteTimeline(bookId, timelineFile, baseUrl = '', opts = {}) {
+  if (!timelineFile) return null;
+  const { signal } = opts;
+  const res = await fetch(
+    `${baseUrl}${LIBRARY_PATH}/${encodeURIComponent(bookId)}/${timelineFile}`,
+    signal ? { signal } : undefined
+  );
+  if (!res.ok) return null;
   return res.json();
 }
 

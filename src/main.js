@@ -28,7 +28,7 @@ import {
   getCachedTranslation, putCachedTranslation,
 } from './db.js';
 import { autoSplitChapters } from './content-splitter.js';
-import { fetchCatalog, fetchRemoteBook, fetchRemoteAudio, visibleBooks, isKnownCode } from './remote-library.js';
+import { fetchCatalog, fetchRemoteBook, fetchRemoteAudio, fetchRemoteTimeline, visibleBooks, isKnownCode } from './remote-library.js';
 import { buildPublishZip, countAudioChapters } from './publish-export.js';
 import {
   normalizeAccessInput, accessToInput,
@@ -1458,6 +1458,7 @@ btnCancel.addEventListener('click', () => {
   cancelGeneration();
   cancelTranslation();
   if (_audioDownloadAbort) _audioDownloadAbort.abort();
+  if (_openBookAbort) _openBookAbort.abort();
 });
 
 // ── Utilities ──
@@ -2065,7 +2066,13 @@ async function ensureChapterAudio(idx, mode) {
         }
       },
     });
-    recordAudioVariant(idx, mode, blob, meta.timeline || null);
+    // Older published books embed the timeline directly in book.json;
+    // current ones publish it as a small sidecar file, fetched only now —
+    // not upfront with book.json, where it would bloat every shelf open.
+    const timeline = meta.timeline || await fetchRemoteTimeline(
+      state.remoteId, meta.timelineFile, import.meta.env.BASE_URL, { signal: _audioDownloadAbort.signal }
+    ).catch(() => null);
+    recordAudioVariant(idx, mode, blob, timeline);
     persistAudio(idx); // cache for offline replay
     if (state.activeChapter === idx) updateChapterButtons(idx);
     updateChapterRow(idx);
@@ -2374,12 +2381,19 @@ function normalizeAudioFiles(ch) {
   return {};
 }
 
+let _openBookAbort = null;
+
 async function openRemoteBook(entry) {
   const storageId = `remote:${entry.id}`;
+  // Opening a book means downloading its full book.json first — with no
+  // feedback, a slow connection or a large manifest just looks frozen.
+  showProgress(`📖 打开《${entry.title}》`);
+  progressText.textContent = '正在获取书籍数据…';
+  _openBookAbort = new AbortController();
   try {
     let data;
     try {
-      data = await fetchRemoteBook(entry.id, import.meta.env.BASE_URL);
+      data = await fetchRemoteBook(entry.id, import.meta.env.BASE_URL, { signal: _openBookAbort.signal });
       // Cache for offline reopening
       saveBook({
         id: storageId,
@@ -2390,6 +2404,7 @@ async function openRemoteBook(entry) {
         remoteMeta: data.chapters.map(ch => ({ audioFiles: normalizeAudioFiles(ch) })),
       }).catch(() => {});
     } catch (err) {
+      if (err.name === 'AbortError') throw err;
       // Offline fallback: use the cached copy if we have one
       const cached = await getBook(storageId);
       if (!cached) throw err;
@@ -2434,7 +2449,12 @@ async function openRemoteBook(entry) {
       } catch { /* ignore */ }
     }
   } catch (err) {
-    showToast('无法打开书籍: ' + err.message, 'error');
+    if (err.name !== 'AbortError') {
+      showToast('无法打开书籍: ' + err.message, 'error');
+    }
+  } finally {
+    _openBookAbort = null;
+    hideProgress();
   }
 }
 

@@ -249,7 +249,12 @@ class Handler(BaseHTTPRequestHandler):
                 # the book that's already live. Unique per request (not just
                 # per book id) so two concurrent publishes of the same book
                 # can't extract into — and corrupt — the same directory.
+                # mkdtemp defaults to mode 0700 for security; since this
+                # directory becomes the live, publicly-served book folder
+                # once renamed into place, it must be world-readable/
+                # traversable or nginx gets a 403 on every file inside it.
                 staging = tempfile.mkdtemp(prefix="." + book_id + ".staging-", dir=LIB)
+                os.chmod(staging, 0o755)
                 for name in names:
                     with zf.open(name) as src, open(os.path.join(staging, name), "wb") as out:
                         shutil.copyfileobj(src, out)

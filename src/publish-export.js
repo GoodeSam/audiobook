@@ -31,6 +31,11 @@ function audioFilename(idx, mode) {
   return `${String(idx + 1).padStart(3, '0')}-${mode}.mp3`;
 }
 
+/** Filename for one chapter's playback timeline in a given mode. */
+function timelineFilename(idx, mode) {
+  return `${String(idx + 1).padStart(3, '0')}-${mode}.timeline.json`;
+}
+
 /**
  * Build the book.json manifest for publishing.
  * Pure function — testable without blobs.
@@ -40,10 +45,18 @@ function audioFilename(idx, mode) {
  * listeners can pick which one to hear, instead of only the most recently
  * generated mode surviving.
  *
+ * Per-sentence playback timelines are NOT embedded here — for a book with
+ * many chapters of dense dialogue they can be several MB in total, and
+ * every listener downloads book.json in full just to browse chapter
+ * titles, long before any specific chapter's timing data is needed. Each
+ * mode instead gets a `timelineFile` pointer to a small sidecar JSON file,
+ * fetched lazily only when that chapter/mode is actually opened — the same
+ * lazy-fetch pattern already used for the MP3s themselves.
+ *
  * @param {object} book - { title, chapters: [{title, markdown, translatedMarkdown}] }
  * @param {string} bookId
  * @param {object} audioVariants - chapterIndex -> { [mode]: { blob, timeline } }
- * @returns {object} manifest with chapters[].audioFiles = { mode: { file, size, timeline } }
+ * @returns {object} manifest with chapters[].audioFiles = { mode: { file, size, timelineFile } }
  */
 export function buildPublishManifest(book, bookId, audioVariants = {}) {
   return {
@@ -55,7 +68,11 @@ export function buildPublishManifest(book, bookId, audioVariants = {}) {
       const audioFiles = {};
       for (const [mode, { blob, timeline }] of Object.entries(variants)) {
         if (!blob) continue;
-        audioFiles[mode] = { file: audioFilename(idx, mode), size: blob.size || 0, timeline: timeline || null };
+        audioFiles[mode] = {
+          file: audioFilename(idx, mode),
+          size: blob.size || 0,
+          timelineFile: (timeline && timeline.length > 0) ? timelineFilename(idx, mode) : null,
+        };
       }
       return {
         title: ch.title,
@@ -73,7 +90,8 @@ export function countAudioChapters(manifest) {
 }
 
 /**
- * Build the publish ZIP: book.json + one MP3 per (chapter, generated mode).
+ * Build the publish ZIP: book.json + one MP3 (+ one timeline sidecar JSON,
+ * where applicable) per chapter/mode.
  * @returns {Promise<{blob: Blob, filename: string, manifest: object}>}
  */
 export async function buildPublishZip(book, bookId, audioVariants) {
@@ -83,8 +101,12 @@ export async function buildPublishZip(book, bookId, audioVariants) {
   zip.file('book.json', JSON.stringify(manifest));
   for (let idx = 0; idx < book.chapters.length; idx++) {
     const variants = audioVariants[idx] || {};
-    for (const [mode, { blob }] of Object.entries(variants)) {
-      if (blob) zip.file(audioFilename(idx, mode), blob);
+    for (const [mode, { blob, timeline }] of Object.entries(variants)) {
+      if (!blob) continue;
+      zip.file(audioFilename(idx, mode), blob);
+      if (timeline && timeline.length > 0) {
+        zip.file(timelineFilename(idx, mode), JSON.stringify(timeline));
+      }
     }
   }
   const blob = await zip.generateAsync({ type: 'blob' });
