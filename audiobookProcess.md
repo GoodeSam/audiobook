@@ -612,3 +612,21 @@ Verified live in the browser: entering fullscreen from both full-text and subtit
 3. 直接用你的原文件验证（不是虚构用例）：完全按 App 的处理方式解析，先确认复现了 bug（522 份，可朗读文字被虚高的总长度掩盖），修复后再确认 15 份中每份的可朗读文字都稳定落在 5800–5980 字左右，正好贴近目标值。同时新增了一条永久回归测试，用混入超大"图片"段落的合成文本验证：未修复时失败（75 份），修复后通过，避免以后悄悄回归。
 4. **说明：** 这个修复只对之后的新上传生效——你本地书库里这本书之前已经按旧的错误逻辑生成过（522 个零碎章节）。需要重新上传同一个 EPUB 文件才能拿到修正后的 15 章版本；由于分割形状变了，App 会把它当作不同内容处理，不会尝试复用旧的零碎翻译，所以旧的 522 章版本可以放心从"我的书库"删除（如果已经发布到网站，也可以下架/替换）。
 342 个测试通过（新增 1 个）。已部署 audiobook.tumei.online 并推送 GitHub。
+
+\>> 我作为管理员上传了一本稍微长一点的书上去了以后，用户的界面需要等很久才有任何反应。解决这个问题 After the admin uploads a somewhat longer book, the user-facing interface takes a long time to respond. Fix it.
+
+**Final report (EN):** Found the real cause — it wasn't rendering or parsing speed, it was the size of the published `book.json` itself.
+
+1. **Investigation.** Profiled the actual upload pipeline against the same real book from the previous fix (Football Academy: Boys United) — parsing + Markdown conversion + auto-split together took ~330ms, nowhere near "long wait" territory. So the slowness wasn't in the admin's upload step at all. Checked the live catalog and found this exact book already published with **522 chapters / 503 audio files** — confirming the previous fragmentation bug had already shipped to production before that fix landed.
+2. **Root cause:** `buildPublishManifest` (in `publish-export.js`) embeds each chapter's full Markdown — including any base64 data-URI images the EPUB parser inlined — directly into `book.json`. But the reader/player never displays or narrates images at all (`stripMarkdown` already strips every `![alt](url)` before showing or speaking text) — so those embedded images are pure dead weight in the published file. For this book, that made `book.json` roughly 3MB that every single user had to download in full before the reader would show anything — that's the "long wait before any response."
+3. **Fix:** images are now stripped from the manifest at publish time — same narration content, none of the image bytes. Verified directly against the real book: `book.json` dropped from ~3MB to **92KB (about 34x smaller)**. Added a dedicated test file for `publish-export.js` (it had none before), covering normal manifest building, audio-file marking, and the new image-stripping behavior specifically.
+4. **One thing you'll need to do manually:** this only changes what gets published *going forward* — the already-published "Football Academy: Boys United" is still serving the old bloated `book.json` right now. Since audio generation runs in your browser against Edge TTS/Microsoft Translator (not something I can trigger from a backend script), you'll need to re-upload that EPUB (now correctly splitting into 15 real chapters instead of 522 — from the previous fix), translate + generate audio again, and republish it to replace the slow version on the live site.
+349 tests pass (7 new). Deployed to audiobook.tumei.online and pushed to GitHub.
+
+**最终报告（中文）：** 找到了真正的原因——不是解析或渲染慢，而是发布出去的 `book.json` 文件本身太大。
+
+1. **排查过程。** 用上一次修复涉及的同一本真实书（Football Academy: Boys United）实测了上传流程：解析 + 转 Markdown + 自动分割合计只要约 330ms，远够不上"等很久"。所以慢的地方根本不在管理员的上传这一步。查了线上目录，发现这本书目前正以 **522 章、503 段音频**的状态在线上发布着——说明之前那次分割碎片化的 bug 其实已经在修复前就已经上线生产环境了。
+2. **根本原因：** `publish-export.js` 里的 `buildPublishManifest` 把每一章完整的 Markdown（包括 EPUB 解析器内联进去的 base64 图片数据）原封不动塞进了 `book.json`。但阅读器/播放器根本不会展示或朗读图片（`stripMarkdown` 在显示或朗读文字前早就把所有 `![alt](url)` 去掉了）——所以这些内嵌图片在发布出去的文件里纯属死重量。对这本书来说，这让 `book.json` 涨到了约 3MB，每一个用户打开书之前都要先完整下载这 3MB，这就是"等很久才有反应"的根源。
+3. **修复：** 发布时现在会把图片从清单里剥离——朗读内容完全不变，只是不再带图片字节。直接用真实这本书验证：`book.json` 从约 3MB 降到了 **92KB（约缩小 34 倍）**。同时给 `publish-export.js`（之前完全没有测试）新增了专门的测试文件，覆盖正常清单构建、音频文件标记，以及这次新加的图片剥离行为。
+4. **有一步需要你手动做：** 这个修复只对"之后新发布"的内容生效——已经发布的《Football Academy: Boys United》目前仍然是那个臃肿的旧版 `book.json`。由于音频生成是在你的浏览器里对接 Edge TTS/微软翻译完成的（不是我能从后台脚本触发的操作），你需要重新上传那个 EPUB 文件（现在会正确分成 15 个真实章节，而不是 522 个——沿用上一次的修复），重新翻译并生成音频，然后重新发布替换线上的旧版本。
+349 个测试通过（新增 7 个）。已部署 audiobook.tumei.online 并推送 GitHub。
