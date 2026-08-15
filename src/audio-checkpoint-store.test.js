@@ -52,6 +52,18 @@ describe('shouldFlushCheckpoint', () => {
   it('never flushes at zero progress', () => {
     expect(shouldFlushCheckpoint({ completedIndex: 0, totalSegments: 100, lastFlushed: 0, flushEvery: 20 })).toBe(false);
   });
+
+  // A run killed before the first interval used to leave nothing on disk, so
+  // the chapter row looked untouched and the retry restarted from zero.
+  it('always writes the first segment so an early interruption leaves a trace', () => {
+    expect(shouldFlushCheckpoint({ completedIndex: 1, totalSegments: 100, lastFlushed: 0, flushEvery: 20 })).toBe(true);
+  });
+
+  it('does not treat every early segment as due — only the first', () => {
+    expect(shouldFlushCheckpoint({ completedIndex: 2, totalSegments: 100, lastFlushed: 1, flushEvery: 20 })).toBe(false);
+    expect(shouldFlushCheckpoint({ completedIndex: 19, totalSegments: 100, lastFlushed: 1, flushEvery: 20 })).toBe(false);
+    expect(shouldFlushCheckpoint({ completedIndex: 21, totalSegments: 100, lastFlushed: 1, flushEvery: 20 })).toBe(true);
+  });
 });
 
 describe('isResumable', () => {
@@ -130,7 +142,7 @@ describe('createSegmentPersister', () => {
       await persister.record(cp(i, 100));
     }
 
-    expect(save).toHaveBeenCalledTimes(2); // at 5 and 10
+    expect(save).toHaveBeenCalledTimes(3); // 1 (always), then 6 and 11
   });
 
   it('flushes the final segment regardless of the interval', async () => {
@@ -141,7 +153,35 @@ describe('createSegmentPersister', () => {
       await persister.record(cp(i, 12));
     }
 
-    expect(save).toHaveBeenCalledTimes(3); // 5, 10, 12
+    expect(save).toHaveBeenCalledTimes(4); // 1, 6, 11, then 12 as the last segment
+  });
+
+  // The synthesis loop awaits each write for ordering, so a save that hangs
+  // instead of failing used to stall the whole chapter with no error at all.
+  it('treats a hung save as a failure rather than waiting forever', async () => {
+    const save = vi.fn(() => new Promise(() => {})); // never settles
+    const onError = vi.fn();
+    const persister = createSegmentPersister({
+      save, remove: vi.fn(), flushEvery: 1, saveTimeoutMs: 20, onError,
+    });
+
+    await persister.record(cp(1, 100));
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0].message).toMatch(/timed out/);
+    expect(persister.persistedAny()).toBe(false);
+  });
+
+  it('gives up after repeated hung saves instead of stalling each time', async () => {
+    const save = vi.fn(() => new Promise(() => {}));
+    const persister = createSegmentPersister({
+      save, remove: vi.fn(), flushEvery: 1, saveTimeoutMs: 20, maxFailures: 3,
+    });
+
+    for (let i = 1; i <= 5; i++) await persister.record(cp(i, 100));
+
+    expect(save).toHaveBeenCalledTimes(3);
+    expect(persister.failed()).toBe(true);
   });
 
   it('passes the checkpoint through to save unchanged', async () => {

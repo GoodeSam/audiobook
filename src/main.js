@@ -27,6 +27,7 @@ import { countTranslatableParagraphs } from './paragraph-utils.js';
 import { Player } from './player.js';
 import { formatTime } from './audio-timeline.js';
 import {
+  openDatabase,
   listUsers, createUser,
   saveBook, getBook, listBooks, deleteBook,
   saveChapterAudio, getBookAudio, deleteChapterAudioVariant,
@@ -1133,6 +1134,30 @@ const wakeLock = createWakeLock();
  * count, so a stale or cross-mode checkpoint degrades to a clean start instead
  * of splicing two different segment lists into one MP3.
  */
+/**
+ * Refuse to start a long run when nothing it produces could be saved.
+ *
+ * Generating a book is tens of minutes of work whose only durable output goes
+ * through IndexedDB. When the database can't be opened — most often because
+ * another tab of this site is holding an older version open and blocking the
+ * upgrade — every chapter and every checkpoint is discarded at the end. The run
+ * used to proceed anyway and look successful until publish said there was no
+ * audio, so failing up front with the actual remedy is strictly better.
+ */
+async function ensureStorageReady() {
+  if (!state.bookId) return true; // nothing to persist against
+  try {
+    await openDatabase();
+    return true;
+  } catch (err) {
+    showToast(
+      `⚠️ 无法访问本地存储：${err.message}\n生成的音频将无法保存，已中止。请关闭本站的其他标签页后刷新重试。`,
+      'error', 12000,
+    );
+    return false;
+  }
+}
+
 function prepareResume(idx, mode) {
   const stored = getAudioCheckpoint(state, idx, mode);
   const persister = createSegmentPersister({
@@ -1166,6 +1191,7 @@ function clearCheckpoints(idx, mode, persister) {
 }
 
 async function generateSingleChapter(idx) {
+  if (!await ensureStorageReady()) return;
   const ch = state.book.chapters[idx];
   const mode = audioModeSelect.value;
 
@@ -1259,6 +1285,7 @@ async function generateMultipleChapters(indices) {
   if (toTranslate.length > 0) phases.push({ name: 'translating', weight: 0.3 });
   if (toGenerate.length > 0) phases.push({ name: 'generating', weight: 0.7 });
   if (phases.length === 0) return; // Nothing to do — don't set generating flag
+  if (!await ensureStorageReady()) return;
   state.generating = true;
   // If only one phase, give it full weight
   if (phases.length === 1) phases[0].weight = 1.0;

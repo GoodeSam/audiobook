@@ -16,8 +16,31 @@
 const DB_NAME = 'audiobook-app';
 const DB_VERSION = 4;
 
+/** An open that hasn't settled by now is stuck, not slow. */
+export const DB_OPEN_TIMEOUT_MS = 10000;
+
 let _dbPromise = null;
 
+/**
+ * Open (and if needed upgrade) the app database.
+ *
+ * Every branch here settles. The original version handled only `success` and
+ * `error`, which left two ways for the promise to hang forever:
+ *
+ *  - `blocked`: another tab still holds the database at an older version, so
+ *    the upgrade cannot run. `onblocked` had no listener, so the promise never
+ *    settled — and since it is cached in `_dbPromise`, every later call
+ *    inherited the same dead promise. Checkpoint writes are awaited inside the
+ *    synthesis loop, so a hung open froze generation mid-chapter with no error,
+ *    no progress, and nothing written to disk.
+ *  - a stuck open with no event at all: bounded by a timeout for the same reason.
+ *
+ * `versionchange` is also handled now: when a NEWER tab wants to upgrade, this
+ * connection closes itself so it is not the tab doing the blocking.
+ *
+ * A failed open clears the cache, so closing the offending tab and retrying
+ * works without a page reload.
+ */
 export function openDatabase() {
   if (_dbPromise) return _dbPromise;
   _dbPromise = new Promise((resolve, reject) => {
@@ -25,7 +48,23 @@ export function openDatabase() {
       reject(new Error('IndexedDB is not available'));
       return;
     }
+    let settled = false;
+    let timer = null;
+    const settle = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      fn(arg);
+    };
+    timer = setTimeout(() => settle(reject, new Error(
+      '打开本地数据库超时 — 请关闭本站的其他标签页后重试'
+    )), DB_OPEN_TIMEOUT_MS);
+
     const req = indexedDB.open(DB_NAME, DB_VERSION);
+    // Another tab holds an older version open, so the upgrade cannot proceed.
+    req.onblocked = () => settle(reject, new Error(
+      '本地数据库被本站的其他标签页占用，无法升级 — 请关闭其他标签页后刷新'
+    ));
     req.onupgradeneeded = (event) => {
       const db = req.result;
       if (!db.objectStoreNames.contains('users')) {
@@ -64,8 +103,22 @@ export function openDatabase() {
         db.createObjectStore('translations', { keyPath: 'key' });
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error || new Error('Failed to open IndexedDB'));
+    req.onsuccess = () => {
+      const db = req.result;
+      // A newer tab wants to upgrade: drop this handle rather than block it,
+      // and forget the cached promise so the next call reopens cleanly.
+      db.onversionchange = () => {
+        db.close();
+        _dbPromise = null;
+      };
+      settle(resolve, db);
+    };
+    req.onerror = () => settle(reject, req.error || new Error('Failed to open IndexedDB'));
+  }).catch((err) => {
+    // Don't cache a permanent failure — the usual cause (another tab) is
+    // something the user can fix without reloading.
+    _dbPromise = null;
+    throw err;
   });
   return _dbPromise;
 }

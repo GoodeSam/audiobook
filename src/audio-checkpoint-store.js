@@ -16,6 +16,28 @@
  *  enough that IndexedDB writes don't dominate synthesis time. */
 export const DEFAULT_FLUSH_EVERY = 20;
 
+/** A checkpoint write that hasn't landed by now is stuck, not slow. */
+export const DEFAULT_SAVE_TIMEOUT_MS = 15000;
+
+/**
+ * Reject if `promise` hasn't settled in `ms`.
+ *
+ * The synthesis loop awaits each checkpoint write for ordering. A pending
+ * promise never throws, so a storage layer that hangs instead of failing used
+ * to stall the whole chapter silently. A timeout converts "hung" into "failed",
+ * which the persister already knows how to survive.
+ */
+function withTimeout(promise, ms, label) {
+  if (!ms || ms <= 0) return Promise.resolve(promise);
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    Promise.resolve(promise).then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
+
 /**
  * Should progress be written to storage at this point?
  *
@@ -37,6 +59,11 @@ export function shouldFlushCheckpoint({
   // The last segment always gets written — otherwise a chapter that ends
   // between intervals leaves its tail unrecoverable.
   if (completedIndex >= totalSegments) return true;
+  // The very first segment is always written. An interruption before the first
+  // full interval left nothing on disk at all, so the chapter row looked
+  // untouched, the run read as "never started", and the retry began at zero.
+  // One extra small write buys a visible "已中断" marker for every run.
+  if (lastFlushed === 0 && completedIndex === 1) return true;
   // `>=` rather than a modulo test: a resume can start mid-interval and never
   // land on an exact multiple.
   return completedIndex - lastFlushed >= flushEvery;
@@ -113,6 +140,7 @@ export function createSegmentPersister({
   remove,
   flushEvery = DEFAULT_FLUSH_EVERY,
   maxFailures = 3,
+  saveTimeoutMs = DEFAULT_SAVE_TIMEOUT_MS,
   onError,
 }) {
   let lastFlushed = 0;
@@ -131,7 +159,7 @@ export function createSegmentPersister({
       });
       if (!due) return;
       try {
-        await save(checkpoint);
+        await withTimeout(save(checkpoint), saveTimeoutMs, 'checkpoint save');
         lastFlushed = checkpoint.completedIndex;
         failures = 0;
         persisted = true;
@@ -146,7 +174,7 @@ export function createSegmentPersister({
     /** Chapter finished — the full MP3 supersedes the segment checkpoint. */
     async done() {
       try {
-        await remove();
+        await withTimeout(remove(), saveTimeoutMs, 'checkpoint cleanup');
       } catch (err) {
         if (onError) onError(err, { failures, giveUp: false });
       }

@@ -910,3 +910,127 @@ confirming the module was never in the bundle graph. Tests: 429 passing
 但只有它自己的测试 import 它；取代它的续传逻辑现在在 `audio-checkpoint-store.js`，
 按音频模式分键且真正落盘。构建产物哈希未变（`index-2Q7Er3TN.js`），证明它从未进入
 打包图，线上无需重新部署。测试：429 通过（441 减去该文件的 12 个）。
+
+---
+
+## Resume still restarted from zero — the storage layer could hang forever
+
+**Reported:** generation runs for a while, the screen later shows nothing, publish
+says "还没有生成音频", and regenerating starts from segment 0 — i.e. every symptom
+the previous resume work was supposed to remove.
+
+### First, what was ruled out
+
+The live site at `audiobook.tumei.online` was serving `index-2Q7Er3TN.js`, byte-identical
+to the local `dist/` build, so the resume fix *was* deployed. The service worker uses
+hashed asset names with a network-first navigation strategy, so it cannot pin an old
+bundle either. The defect was in the code, not the deployment.
+
+### Root cause: `openDatabase` had two ways to never settle
+
+`db.js` listened only for `success` and `error`:
+
+- **`blocked` had no handler.** Release 937e206 raised the schema to v4 to add the
+  `audioCheckpoints` store. If any other tab or PWA window of the site still held the
+  database at v3, the browser fires `blocked` and refuses the upgrade. With nothing
+  listening, the promise never settled.
+- **A stuck open had no timeout.**
+
+Both mattered far more than they look, for two compounding reasons. `_dbPromise` caches
+the result, so a single hung open poisons *every* later database call in the page. And
+`edge-tts.js` awaits each checkpoint write inside the synthesis loop (`await
+emitCheckpoint(i + 1)`) to keep IndexedDB writes ordered. A pending promise never
+throws, so the surrounding `try/catch` cannot see it: at the first flush the loop simply
+stopped — no error, no progress, no `finally`, nothing on disk. That reproduces the
+report exactly, including "nothing displayed" and "publish says no audio".
+
+### Fixes
+
+| Location | Change |
+|---|---|
+| `db.js` | `onblocked` and a 10s timeout both reject with an actionable message. `onversionchange` closes this connection so it can't block a newer tab. A failed open clears `_dbPromise`, so closing the offending tab and retrying works without a reload. |
+| `audio-checkpoint-store.js` | `createSegmentPersister` races every `save`/`remove` against `saveTimeoutMs` (15s), converting "hung" into "failed" — a state the existing failure counter already handles. |
+| `audio-checkpoint-store.js` | The **first** completed segment is now always written. Previously a run killed before segment 20 left nothing at all, so the row looked untouched and the retry began at zero. |
+| `main.js` | `ensureStorageReady()` opens the database *before* a run starts and aborts with a clear message if it can't. Tens of minutes of synthesis whose output is discarded at the end is strictly worse than refusing up front. |
+
+### What this deliberately does not fix
+
+`en-zh-en-sentence` (the default mode) translates the whole chapter inside
+`generateChapterAudio` before the segment loop begins, so an interruption during that
+phase still leaves no *audio* checkpoint. The per-batch translation cache from 937e206
+makes the retry fast, but audio genuinely restarts at 0 because none was produced. That
+is correct behaviour that looks like the bug; separating the two needs a translation-phase
+marker on the chapter row, which is not done here.
+
+The root cause was not confirmed against the reporting device's IndexedDB contents — the
+diagnostic step was skipped by request. These fixes close every candidate cause found by
+reading the code, and each is independently correct, but the specific one that fired
+in the wild remains unproven.
+
+### Verification
+
+`npx vitest run` — 439 passing (was 429; +10 covering the blocked/timeout/versionchange
+paths in a new `db.test.js`, the hung-save path, and the first-segment flush policy).
+`npx vite build` clean.
+
+Verify by hand: open the site in two tabs, generate in one, and confirm it now reports
+the blocked database instead of silently producing nothing. Then close the other tabs,
+start a run, kill the tab after a few segments, reopen the book — the chapter row should
+read "⚠️ 已中断 n/N" even if fewer than 20 segments finished.
+
+## 续传仍然从零开始 —— 存储层可能永久挂起
+
+**现象：** 生成跑了一段时间，回来界面什么都没有，点发布提示"还没有生成音频"，
+重新生成又从第 0 段开始 —— 正是上一轮续传改造本应消除的全部症状。
+
+### 先排除掉的可能
+
+线上 `audiobook.tumei.online` 提供的是 `index-2Q7Er3TN.js`，与本地 `dist/` 构建完全一致，
+说明续传修复**确实已经上线**。Service Worker 用哈希文件名 + 导航 network-first，
+也不可能把旧包钉住。所以问题在代码里，不在部署。
+
+### 根因：`openDatabase` 有两条永不结算的路径
+
+`db.js` 只监听了 `success` 和 `error`：
+
+- **`blocked` 没有处理函数。** 937e206 把 schema 升到 v4 以新增 `audioCheckpoints` store。
+  只要本站还有任何一个标签页或 PWA 窗口把数据库保持在 v3，浏览器就会触发 `blocked`
+  并拒绝升级。没人监听，于是这个 Promise 永远悬着。
+- **卡住的 open 没有超时。**
+
+这两点的杀伤力被两个因素放大。其一，`_dbPromise` 会缓存结果，所以一次悬挂就毒化了
+页面里**之后所有**的数据库调用。其二，`edge-tts.js` 在合成循环里 `await
+emitCheckpoint(i + 1)`，以保证 IndexedDB 写入有序。挂起的 Promise 永远不会抛异常，
+外层 `try/catch` 因此完全看不见它：第一次 flush 一到，循环就停在那儿 —— 没有报错、
+没有进度、不进 `finally`、磁盘上什么都没有。这与报告的现象完全吻合，
+包括"什么都没显示"和"发布说没有音频"。
+
+### 修复
+
+| 位置 | 改动 |
+|---|---|
+| `db.js` | `onblocked` 与 10 秒超时都会以可操作的提示 reject。`onversionchange` 主动关闭本连接，避免自己成为挡住新标签页的那一个。open 失败时清空 `_dbPromise`，因此关掉占用的标签页后无需刷新即可重试。 |
+| `audio-checkpoint-store.js` | `createSegmentPersister` 让每次 `save`/`remove` 与 `saveTimeoutMs`（15 秒）赛跑，把"挂起"转换成"失败" —— 而失败是既有的计数器已经会处理的状态。 |
+| `audio-checkpoint-store.js` | **第 1 段**现在必定落盘。此前一次在第 20 段前被杀死的运行不留任何痕迹，章节行看起来像没动过，重试自然从零开始。 |
+| `main.js` | `ensureStorageReady()` 在开跑**之前**打开数据库，打不开就带明确提示中止。让你等几十分钟、结果产物在最后被全部丢弃，明显不如一开始就拒绝。 |
+
+### 刻意没有修的部分
+
+`en-zh-en-sentence`（默认模式）会在 `generateChapterAudio` 内部、分段循环开始之前
+把整章翻完，因此中断发生在这一阶段时，**音频**断点确实一条也没有。937e206 的
+逐批翻译缓存让重试很快，但音频从 0 开始是因为压根没生成过 —— 这是**看起来像 bug
+的正确行为**。要把两者区分开，需要在章节行上加一个翻译阶段的标记，本次未做。
+
+根因没有对着出问题设备的 IndexedDB 实际内容验证过 —— 该诊断步骤按要求跳过了。
+以上修复堵住了通读代码找到的全部候选原因，且每一项本身都是正确的，
+但真正在线上触发的究竟是哪一个，仍未证实。
+
+### 验证方式
+
+`npx vitest run` —— 439 通过（原 429；新增 10 个，覆盖新建 `db.test.js` 里的
+blocked/超时/versionchange 三条路径、挂起写入路径，以及第 1 段落盘策略）。
+`npx vite build` 无报错。
+
+手工验证：用两个标签页打开本站，在其中一个里生成，确认它现在会报告数据库被占用，
+而不是默默地什么都不产出。然后关掉其他标签页，开始生成，跑几段后杀掉标签页再重开这本书 ——
+即使完成的段数不到 20，章节行也应显示"⚠️ 已中断 n/N"。
