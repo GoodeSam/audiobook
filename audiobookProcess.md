@@ -1109,3 +1109,100 @@ jsdom 回答不了这个问题——它没有 IndexedDB，而 `db.test.js` 里�
 
 清理：测试数据库与 localStorage 已删除，dev server 已停止。未触碰任何生产数据，
 未改动任何代码。
+
+---
+
+## A safety net for main.js, then the first extraction
+
+main.js was 2915 lines with no tests — the only large untested module left, and
+where every recurring generation/resume/publish bug had landed. Every other
+module was small and covered. Refactoring it directly would have meant being
+unable to tell "I broke it" from "it was always like that", so the work went
+safety-net first: characterize, then restructure.
+
+**The harness** (`src/test-fixtures/app-harness.js`) boots the real module —
+index.html's DOM, the I/O leaves mocked, driven by clicking the same buttons a
+user clicks. main.js needed no change to allow it. Two details were
+load-bearing: `vi.resetModules()` per boot, because 65 listeners are attached at
+import time and a cached module plus a rebuilt DOM leaves every button dead; and
+seeding adminMode, because the app otherwise boots into listener mode where
+chapter rows render a different view entirely and never reach the admin
+branches.
+
+**Two real bugs surfaced while pinning behaviour.**
+
+The first: `generateSingleChapter` called `renderChapterList()` from `catch`,
+but `state.generating = false` lives in `finally`, which runs after it. The row
+renderer branches on that flag, so the repaint meant to show "⚠️ 已中断 (n/N)"
+painted "Generating..." and nothing repainted again — a failed run claimed to
+still be running forever. `generateMultipleChapters` already had it right.
+
+The second, found by an independent review of the refactor plan and then
+reproduced as a failing test: both paths deleted the resume checkpoint *before*
+saving the finished MP3, and the save swallowed its own failure. A failed final
+write destroyed both halves of the durability promise at once, and the chapter
+silently read as "never generated".
+
+**Then the extraction.** Both bugs were the same shape: the generation sequence
+existed twice and the copies drifted. `chapter-generation.js` now owns that
+sequence and its invariant — at every instant either a resumable checkpoint or a
+finished MP3 exists on disk, so the checkpoint is cleared only after a confirmed
+persist and never on a failure path. It touches no DOM, never throws, and takes
+its collaborators by injection, so it is testable without a browser, a
+WebSocket, or IndexedDB.
+
+**An honest measurement:** main.js did not shrink (2915 -> 2942 lines). The
+named-parameter call sites are about as long as the inline code was. The win is
+that the sequence exists once and is directly tested, not that the file got
+smaller. Real shrinkage needs the rendering layer extracted too, which is not
+done.
+
+**Coverage now:** generation and resume (7), reopen/restore and publish (9),
+upload and translation (9), the coordinator itself (8). Each batch was checked
+by mutation rather than trusted because it was green: deliberately breaking
+checkpoint restore, the publish audio guard, book-id collision handling, the
+translation resume, and the concurrent-upload guard turned the expected tests
+red, and reverting turned them green again. A test that never fails is not a
+test.
+
+Tests: 472 passing (was 439 at the start of this work).
+
+## 为 main.js 建安全网，然后做第一次提取
+
+main.js 有 2915 行且零测试——是最后一个没有安全网的大模块，而所有反复出现的
+生成/续传/发布 bug 都落在它里面。其余模块都小且有覆盖。直接重构它意味着无法区分
+"我改坏了"和"它本来就这样"，所以按先建网、后动结构的顺序推进。
+
+**harness**（`src/test-fixtures/app-harness.js`）启动真实模块——注入 index.html 的
+DOM，把 I/O 叶子模块换成假的，然后像用户一样点真实按钮驱动。main.js 未作任何改动。
+两个细节是关键：每次引导都要 `vi.resetModules()`，因为 65 个监听器是在 import 时
+绑定的，模块被缓存后再重建 DOM 会让所有按钮变成死的；以及必须预置 adminMode，
+否则应用启动进的是听众模式，章节行渲染的是完全不同的视图，根本走不到管理员分支。
+
+**钉行为的过程中浮出两个真 bug。**
+
+其一：`generateSingleChapter` 在 `catch` 里调用 `renderChapterList()`，而
+`state.generating = false` 在 `finally` 里——后者晚于前者执行。章节行渲染器依赖
+这个标志分支，于是那次"专门为了显示 ⚠️ 已中断 (n/N)"的重绘画出来的是
+"Generating..."，之后再无重绘——失败的运行会永远声称自己还在跑。
+`generateMultipleChapters` 本来就是对的。
+
+其二：由对重构方案的独立评审发现，随后以失败测试复现——两条路径都在保存成品 MP3
+**之前**就删除了续传断点，而保存失败被内部吞掉。一次失败的最终写入会同时销毁
+持久性承诺的两半，这一章便静悄悄地读作"从没生成过"。
+
+**然后是提取。** 两个 bug 是同一个形状：生成序列存在两份，两份走岔了。
+`chapter-generation.js` 现在独占这段序列及其不变量——任何时刻磁盘上要么有可续传的
+断点、要么有成品 MP3，所以断点只在确认落盘之后才删，失败路径上永不删。它不碰 DOM、
+从不抛异常、依赖全部注入，因此不需要浏览器、WebSocket 或 IndexedDB 就能测。
+
+**一个诚实的度量：** main.js 没有变短（2915 → 2942 行）。具名参数的调用点和原来的
+内联代码差不多长。这次的收益是"那段序列只存在一处且被直接测到"，不是文件变小了。
+真正的瘦身需要把渲染层也提取出去，那部分尚未进行。
+
+**目前覆盖：** 生成与续传（7）、重开书/恢复与发布（9）、上传与翻译（9）、
+协调器本身（8）。每一批都做了变异检验，而不是因为全绿就信任它：故意破坏断点恢复、
+发布的音频校验、同名书的 id 分配、翻译续传、并发上传保护，预期的测试都变红，
+还原后恢复绿。**一个从不失败的测试不是测试。**
+
+测试：472 通过（本轮工作开始时为 439）。
