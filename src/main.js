@@ -1184,10 +1184,21 @@ function recordCheckpoint(idx, cpData, persister) {
   return state.bookId ? persister.record(cpData) : undefined;
 }
 
-/** Chapter finished — drop both copies; the full MP3 supersedes them. */
-function clearCheckpoints(idx, mode, persister) {
+/**
+ * Chapter finished AND durably stored — drop both copies of the resume point.
+ *
+ * Only call this once `persistAudio` has confirmed the full MP3 landed. The
+ * checkpoint and the finished audio are the two halves of one durability
+ * promise: at every instant at least one of them must exist on disk. Dropping
+ * the checkpoint first left a window where a failed final write destroyed both,
+ * silently reverting the chapter to "never generated".
+ *
+ * Awaited, so the deletion is ordered against later writes rather than racing
+ * them.
+ */
+async function clearCheckpoints(idx, mode, persister) {
   clearAudioCheckpoint(state, idx, mode);
-  if (state.bookId) persister.done();
+  if (state.bookId) await persister.done();
 }
 
 async function generateSingleChapter(idx) {
@@ -1251,9 +1262,9 @@ async function generateSingleChapter(idx) {
     });
 
     recordAudioVariant(idx, mode, blob, timeline);
-    clearCheckpoints(idx, mode, persister);
-    await persistAudio(idx);
-    renderChapterList();
+    // Commit order: the finished MP3 must be on disk before the resume point
+    // is thrown away. A failed save keeps the checkpoint so a retry resumes.
+    if (await persistAudio(idx)) await clearCheckpoints(idx, mode, persister);
     selectChapter(idx);
   } catch (err) {
     // Checkpoint survives in state AND on disk, so the retry resumes.
@@ -1383,8 +1394,8 @@ async function generateMultipleChapters(indices) {
             onCheckpoint: (cpData) => recordCheckpoint(idx, cpData, persister),
           });
           recordAudioVariant(idx, mode, blob, timeline);
-          clearCheckpoints(idx, mode, persister);
-          await persistAudio(idx);
+          // Same commit order as the single-chapter path — see clearCheckpoints.
+          if (await persistAudio(idx)) await clearCheckpoints(idx, mode, persister);
         } catch (err) {
           if (err.message.includes('cancelled')) throw err;
           failures.push({ chapter: ch.title, phase: 'generate', error: err.message });
@@ -1835,19 +1846,23 @@ function persistBook() {
  * on publish, with nothing telling the user why.
  */
 async function persistAudio(idx, { context = 'generate' } = {}) {
-  if (!state.bookId) return;
+  // No book id means nothing is persisted for this session at all, so there is
+  // no durable state to protect — callers may proceed.
+  if (!state.bookId) return true;
   try {
     await saveChapterAudio(state.bookId, idx, {
       blob: state.audioBlobs[idx],
       timeline: state.audioTimelines[idx] || null,
       audioMode: state.audioModes[idx] || null,
     });
+    return true;
   } catch (err) {
     console.warn('Failed to save audio to library:', err);
     showToast(context === 'download'
       ? `⚠️ 第 ${idx + 1} 章已下载但离线缓存失败（${err.message}）— 关闭页面后需要重新下载`
-      : `⚠️ 第 ${idx + 1} 章音频已生成，但保存到本地库失败（${err.message}）— 刷新页面会丢失，请先下载 MP3`,
+      : `⚠️ 第 ${idx + 1} 章音频已生成，但保存到本地库失败（${err.message}）— 已保留生成进度，可重试；建议先下载 MP3`,
       'error', 10000);
+    return false;
   }
 }
 

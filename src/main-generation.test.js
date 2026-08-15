@@ -214,6 +214,34 @@ describe('resuming an interrupted chapter', () => {
     expect(cp.completedIndex).toBe(1);
   });
 
+  // The durability promise: at every instant there is either a resumable
+  // checkpoint or a finished MP3 on disk. Deleting the checkpoint before the
+  // MP3 write is confirmed opens a window where a failed write leaves neither,
+  // and the chapter silently reverts to "never generated".
+  it('keeps the checkpoint when the finished MP3 fails to save', async () => {
+    const { state, edgeTts, db } = await boot();
+    const mode = document.getElementById('audio-mode-select').value;
+    oneChapterBook(state);
+
+    edgeTts.generateChapterAudio.mockImplementation(async (opts) => {
+      await opts.onCheckpoint({
+        completedIndex: 100, totalSegments: 100, audioMode: mode,
+        audioBlobs: Array.from({ length: 100 }, () => new Blob(['seg'])),
+      });
+      return { blob: new Blob(['mp3']), timeline: null };
+    });
+    // Quota exhausted, or a blocked database — the write that must land, doesn't.
+    db.saveChapterAudio.mockRejectedValue(new Error('QuotaExceededError'));
+
+    document.getElementById('btn-generate-chapter').click();
+    await vi.waitFor(() => expect(db.saveChapterAudio).toHaveBeenCalled());
+    await vi.waitFor(() => expect(state.generating).toBe(false));
+
+    // The resume point must survive, in memory and on disk.
+    expect(db.deleteAudioCheckpoint).not.toHaveBeenCalled();
+    expect(state.audioCheckpoints[0]?.[mode]).toBeTruthy();
+  });
+
   it('refuses to start when storage is unusable rather than synthesizing for nothing', async () => {
     const { state, edgeTts, db } = await boot();
     db.openDatabase.mockRejectedValue(new Error('数据库被本站的其他标签页占用'));
