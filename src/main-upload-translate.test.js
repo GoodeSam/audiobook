@@ -219,6 +219,31 @@ describe('translating a chapter', () => {
     expect(app.state.book.chapters[0].translatedMarkdown).toBeFalsy();
   });
 
+  // The recorder is unit-tested on its own; this proves main.js actually wires
+  // it in and reports afterwards, which is the part that makes it useful.
+  it('reports where the run spent its time when it finishes', async () => {
+    const app = await bootApp();
+    const ms = await import('./ms-translator.js');
+    loadBook(app.state);
+    ms.translateChapter.mockImplementation(async (text, from, to, opts) => {
+      expect(typeof opts.onBatchTiming, 'timing hooks are passed through').toBe('function');
+      opts.onCacheTiming({ hits: 0, misses: 50 });
+      opts.onBatchTiming({ size: 25, networkMs: 2000, pacingMs: 350, rateLimitMs: 0 });
+      opts.onBatchTiming({ size: 25, networkMs: 2000, pacingMs: 350, rateLimitMs: 0 });
+      return '译好的正文';
+    });
+
+    document.getElementById('btn-translate-chapter').click();
+    await vi.waitFor(() =>
+      expect(document.getElementById('toast-container').textContent).toContain('⏱'));
+
+    const toast = document.getElementById('toast-container').textContent;
+    expect(toast).toContain('2 批');
+    expect(toast).toContain('50 句');
+    // The whole point: it names which bucket to attack.
+    expect(toast).toContain('网络往返');
+  });
+
   it('will not retranslate a finished chapter that has no checkpoint', async () => {
     const app = await bootApp();
     const ms = await import('./ms-translator.js');

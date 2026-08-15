@@ -69,6 +69,10 @@ export async function translateText(text, from, to, fetchFn = fetch) {
  * @returns {Promise<string[]>} Translated texts in same order.
  */
 const MAX_RETRIES = 5;
+
+/** Monotonic clock, indirected so tests need no real time to pass. */
+const _now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
 // 429 means the free endpoint is rate-limiting us — it typically needs tens
 // of seconds to clear, far longer than transient 5xx/401 hiccups.
 const RATE_LIMIT_DELAYS = [5000, 15000, 30000, 60000, 90000];
@@ -191,16 +195,38 @@ export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}
  * @returns {Promise<string[]>} translations, same order as texts.
  */
 export async function translateTexts(texts, from, to, opts = {}) {
-  const { fetchFn = fetch, onWait, onChunk, onFallback, onBatch } = opts;
+  const { fetchFn = fetch, onWait, onChunk, onFallback, onBatch, onBatchTiming } = opts;
   _cancelled = false;
   _abortController = new AbortController();
   try {
     const out = [];
     for (let i = 0; i < texts.length; i += BATCH_SIZE) {
       if (_cancelled) throw new Error('Translation cancelled');
+      // Pacing and network are timed apart because they have different fixes:
+      // the sleep is ours to tune, the round trip is not.
+      const pacingStart = _now();
       if (i > 0) await abortableSleep(BATCH_INTERVAL_MS);
+      const pacingMs = _now() - pacingStart;
       const batchTexts = texts.slice(i, i + BATCH_SIZE);
-      const chunk = await translateBatch(batchTexts, from, to, fetchFn, { onWait, onFallback });
+      // 429 waits happen inside translateBatch, so they are subtracted out
+      // rather than counted as network time.
+      let rateLimitMs = 0;
+      const netStart = _now();
+      const chunk = await translateBatch(batchTexts, from, to, fetchFn, {
+        onWait: (seconds, attempt) => {
+          rateLimitMs += seconds * 1000;
+          if (onWait) onWait(seconds, attempt);
+        },
+        onFallback,
+      });
+      if (onBatchTiming) {
+        onBatchTiming({
+          size: batchTexts.length,
+          networkMs: Math.max(0, (_now() - netStart) - rateLimitMs),
+          pacingMs,
+          rateLimitMs,
+        });
+      }
       out.push(...chunk);
       // Report before the next batch can fail — this is the salvage point.
       if (onBatch) {
@@ -252,6 +278,10 @@ export async function translateChapter(markdown, from, to, options = {}) {
     // look like it was starting from zero.
     getCached,
     putCached,
+    // Optional observation hook — see translation-timing.js for why the buckets
+    // are kept apart.
+    onBatchTiming,
+    onCacheTiming,
   } = options;
 
   const cacheKey = (text) => `${from}|${to}|${text}`;
@@ -297,14 +327,20 @@ export async function translateChapter(markdown, from, to, options = {}) {
     const hits = await Promise.all(
       entries.map(e => (e.type === 'translate' ? readCache(e.text) : null))
     );
+    let hitCount = 0;
     hits.forEach((hit, i) => {
       if (hit !== null && hit !== undefined) {
         entries[i].result = hit;
         entries[i].fromCache = true;
+        hitCount++;
         progress++;
         if (onProgress) onProgress(progress, total);
       }
     });
+    if (onCacheTiming) {
+      const looked = entries.filter(e => e.type === 'translate').length;
+      onCacheTiming({ hits: hitCount, misses: looked - hitCount });
+    }
   }
 
   // Process in batches — only translatable entries go to the API
@@ -315,16 +351,31 @@ export async function translateChapter(markdown, from, to, options = {}) {
 
   async function flushCurrentBatch(lastParaIndex) {
     if (batchTexts.length === 0) return;
+    // Timed apart for the same reason as in translateTexts — see there.
+    const pacingStart = _now();
     if (!firstFlush) await abortableSleep(BATCH_INTERVAL_MS);
+    const pacingMs = _now() - pacingStart;
     firstFlush = false;
+    let rateLimitMs = 0;
+    const netStart = _now();
+    const batchSize = batchTexts.length;
     const results = await translateBatch(batchTexts, from, to, fetchFn, {
       onWait: (seconds, attempt) => {
+        rateLimitMs += seconds * 1000;
         if (onStatus) onStatus(`⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 进度不会丢失`);
       },
       onFallback: () => {
         if (onStatus) onStatus('⚡ 微软翻译限流 — 已自动切换 Google 翻译继续');
       },
     });
+    if (onBatchTiming) {
+      onBatchTiming({
+        size: batchSize,
+        networkMs: Math.max(0, (_now() - netStart) - rateLimitMs),
+        pacingMs,
+        rateLimitMs,
+      });
+    }
     for (let r = 0; r < results.length; r++) {
       const entry = entries[batchEntryIndices[r]];
       entry.result = results[r];

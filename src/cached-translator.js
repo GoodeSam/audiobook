@@ -50,6 +50,7 @@ export function createCachingTranslator({
   getCached,
   putCached,
   onStatus,
+  onCacheTiming,
   translateOptions = {},
 }) {
   const keyFor = (text) => translationCacheKey(from, to, text);
@@ -67,6 +68,9 @@ export function createCachingTranslator({
 
     const missIdx = [];
     cached.forEach((c, i) => { if (c === null || c === undefined) missIdx.push(i); });
+    if (onCacheTiming) {
+      onCacheTiming({ hits: texts.length - missIdx.length, misses: missIdx.length });
+    }
 
     if (missIdx.length === 0) {
       if (onStatus) onStatus(`翻译缓存命中 ${texts.length} 句，无需请求翻译服务`);

@@ -23,6 +23,7 @@ import {
 import { createCachingTranslator } from './cached-translator.js';
 import { createSegmentPersister } from './audio-checkpoint-store.js';
 import { runChapterGeneration } from './chapter-generation.js';
+import { createTimingRecorder } from './translation-timing.js';
 import { shouldWarnBeforeUnload, createWakeLock } from './generation-guard.js';
 import { countTranslatableParagraphs } from './paragraph-utils.js';
 import { Player } from './player.js';
@@ -955,6 +956,7 @@ async function translateSingleChapter(idx) {
       onProgress: (current, total) => updateProgress(current, total, `Translating: ${current} / ${total} paragraphs`),
       onStatus: (msg) => { progressText.textContent = msg; },
       onCheckpoint: (cpData) => { state.translationCheckpoints[idx] = cpData; },
+      ...timingHooks(),
     });
     ch.translatedMarkdown = translated;
     delete state.translationCheckpoints[idx];
@@ -972,6 +974,7 @@ async function translateSingleChapter(idx) {
   } finally {
     state.generating = false;
     hideProgress();
+    reportTranslationTiming();
   }
 }
 
@@ -1035,6 +1038,7 @@ async function translateMultipleChapters(indices) {
   } finally {
     state.generating = false;
     hideProgress();
+    reportTranslationTiming();
     if (state.activeChapter !== null) {
       updateTabs();
       showTab(state.activeTab);
@@ -1044,6 +1048,43 @@ async function translateMultipleChapters(indices) {
 
 function detectSourceLang() {
   return 'auto'; // Let Microsoft auto-detect the source language
+}
+
+// ── Translation timing (observation only) ──
+//
+// "Translation is very slow" has three causes that look identical from outside
+// — the counter just advances slowly in all of them — and each needs a
+// different fix: the inter-batch sleep (ours, tunable), the API round trip (not
+// ours), and 429 backoff. A plausible-looking fourth candidate in this same
+// path, one IndexedDB transaction per sentence for the cache, was benchmarked
+// in a real browser at ~170ms per 1000 sentences: far too small to matter. So
+// this measures rather than guesses.
+
+let _translationTiming = null;
+
+/** Hooks to spread into a translate call; starts a run lazily on first use. */
+function timingHooks() {
+  return {
+    onBatchTiming: (b) => {
+      if (!_translationTiming) _translationTiming = createTimingRecorder();
+      _translationTiming.recordBatch(b);
+    },
+    onCacheTiming: (c) => {
+      if (!_translationTiming) _translationTiming = createTimingRecorder();
+      _translationTiming.recordCache(c);
+    },
+  };
+}
+
+/** Report where the finished run spent its time, then reset for the next one. */
+function reportTranslationTiming() {
+  const rec = _translationTiming;
+  _translationTiming = null;
+  if (!rec) return;
+  const summary = rec.summary();
+  if (summary.batches === 0) return;
+  console.log('[translation timing]', summary);
+  showToast('⏱ ' + rec.describe(), 'info', 15000);
 }
 
 /**
@@ -1063,7 +1104,9 @@ function sentenceModeTranslator() {
     getCached: getCachedTranslation,
     putCached: putCachedTranslation,
     onStatus: (msg) => { progressText.textContent = msg; },
+    onCacheTiming: timingHooks().onCacheTiming,
     translateOptions: {
+      onBatchTiming: timingHooks().onBatchTiming,
       onWait: (seconds, attempt) => {
         progressText.textContent = `⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 已翻译的句子已保存，不会重来`;
       },
@@ -1289,6 +1332,7 @@ async function generateSingleChapter(idx) {
     state.generating = false;
     await wakeLock.release();
     hideProgress();
+    reportTranslationTiming();
     // Shows "⚠️ 已中断 (n/N)" after a failure and the finished state after a
     // success, from one place.
     renderChapterList();
@@ -1350,6 +1394,7 @@ async function generateMultipleChapters(indices) {
             },
             onStatus: (msg) => { progressText.textContent = msg; },
             onCheckpoint: (cpData) => { state.translationCheckpoints[idx] = cpData; },
+            ...timingHooks(),
           });
           ch.translatedMarkdown = translated;
           delete state.translationCheckpoints[idx];
@@ -1428,6 +1473,7 @@ async function generateMultipleChapters(indices) {
     state.generating = false;
     await wakeLock.release();
     hideProgress();
+    reportTranslationTiming();
     // Repaint so interrupted chapters show "已中断 (n/N)" rather than looking
     // untouched — the whole reason a dead run read as a finished one.
     renderChapterList();
