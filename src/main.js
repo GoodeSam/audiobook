@@ -22,6 +22,7 @@ import {
 } from './app-state.js';
 import { createCachingTranslator } from './cached-translator.js';
 import { createSegmentPersister } from './audio-checkpoint-store.js';
+import { runChapterGeneration } from './chapter-generation.js';
 import { shouldWarnBeforeUnload, createWakeLock } from './generation-guard.js';
 import { countTranslatableParagraphs } from './paragraph-utils.js';
 import { Player } from './player.js';
@@ -1158,6 +1159,16 @@ async function ensureStorageReady() {
   }
 }
 
+/** The four voice/rate controls, read once instead of at each call site. */
+function voiceSettings() {
+  return {
+    voiceEn: voiceEnSelect.value,
+    voiceZh: voiceZhSelect.value,
+    speechRateEn: parseInt(speedEnRange.value),
+    speechRateZh: parseInt(speedZhRange.value),
+  };
+}
+
 function prepareResume(idx, mode) {
   const stored = getAudioCheckpoint(state, idx, mode);
   const persister = createSegmentPersister({
@@ -1237,22 +1248,24 @@ async function generateSingleChapter(idx) {
 
   try {
     tracker.startPhase('generating', 1);
-    const { blob, timeline } = await generateChapterAudio({
-      originalText: ch.markdown,
-      translatedText: ch.translatedMarkdown,
+    // The sequence and its durability invariant live in chapter-generation.js;
+    // everything supplied here is UI or storage wiring.
+    const result = await runChapterGeneration({
+      chapter: ch,
       audioMode: mode,
-      voiceEn: voiceEnSelect.value,
-      voiceZh: voiceZhSelect.value,
-      speechRateEn: parseInt(speedEnRange.value),
-      speechRateZh: parseInt(speedZhRange.value),
+      voice: voiceSettings(),
       checkpoint: stored,
+      generate: generateChapterAudio,
+      commit: (blob, timeline) => recordAudioVariant(idx, mode, blob, timeline),
+      persist: () => persistAudio(idx),
+      clearCheckpoint: () => clearCheckpoints(idx, mode, persister),
+      translateTexts: sentenceModeTranslator(),
       onResume: ({ resuming, startIndex, totalSegments }) => {
         if (resuming) {
           progressTitle.textContent =
             `继续生成: ${ch.title}（从第 ${startIndex}/${totalSegments} 段接着做）`;
         }
       },
-      translateTexts: sentenceModeTranslator(),
       onStatus: (msg) => { progressText.textContent = msg; },
       onProgress: (current, total) => {
         tracker.startPhase('generating', total);
@@ -1261,15 +1274,11 @@ async function generateSingleChapter(idx) {
       onCheckpoint: (cpData) => recordCheckpoint(idx, cpData, persister),
     });
 
-    recordAudioVariant(idx, mode, blob, timeline);
-    // Commit order: the finished MP3 must be on disk before the resume point
-    // is thrown away. A failed save keeps the checkpoint so a retry resumes.
-    if (await persistAudio(idx)) await clearCheckpoints(idx, mode, persister);
-    selectChapter(idx);
-  } catch (err) {
-    // Checkpoint survives in state AND on disk, so the retry resumes.
-    if (!err.message.includes('cancelled')) {
-      showToast('Audio generation error: ' + err.message, 'error');
+    // Audio was produced even if storing it failed — show it either way.
+    if (result.blob) selectChapter(idx);
+    // A failed persist already explained itself; a cancel is not an error.
+    if (result.error && !result.cancelled) {
+      showToast('Audio generation error: ' + result.error.message, 'error');
     }
   } finally {
     // Order matters: the row renderer branches on `state.generating`, so a
@@ -1370,35 +1379,34 @@ async function generateMultipleChapters(indices) {
         const { stored, persister } = prepareResume(idx, mode);
         progressTitle.textContent = `Generating ${i + 1}/${readyToGenerate.length}: ${ch.title}`;
 
-        try {
-          const { blob, timeline } = await generateChapterAudio({
-            originalText: ch.markdown,
-            translatedText: ch.translatedMarkdown,
-            audioMode: mode,
-            voiceEn: voiceEnSelect.value,
-            voiceZh: voiceZhSelect.value,
-            speechRateEn: parseInt(speedEnRange.value),
-            speechRateZh: parseInt(speedZhRange.value),
-            checkpoint: stored,
-            onResume: ({ resuming, startIndex, totalSegments }) => {
-              if (resuming) {
-                progressTitle.textContent =
-                  `继续生成 ${i + 1}/${readyToGenerate.length}: ${ch.title}（从第 ${startIndex}/${totalSegments} 段接着做）`;
-              }
-            },
-            translateTexts: sentenceModeTranslator(),
-            onStatus: (msg) => { progressText.textContent = msg; },
-            onProgress: (current, segTotal) => {
-              tracker.advance(i + current / segTotal);
-            },
-            onCheckpoint: (cpData) => recordCheckpoint(idx, cpData, persister),
-          });
-          recordAudioVariant(idx, mode, blob, timeline);
-          // Same commit order as the single-chapter path — see clearCheckpoints.
-          if (await persistAudio(idx)) await clearCheckpoints(idx, mode, persister);
-        } catch (err) {
-          if (err.message.includes('cancelled')) throw err;
-          failures.push({ chapter: ch.title, phase: 'generate', error: err.message });
+        // Same coordinator as the single-chapter path — the two used to be
+        // separate copies of this sequence, and they drifted.
+        const result = await runChapterGeneration({
+          chapter: ch,
+          audioMode: mode,
+          voice: voiceSettings(),
+          checkpoint: stored,
+          generate: generateChapterAudio,
+          commit: (blob, timeline) => recordAudioVariant(idx, mode, blob, timeline),
+          persist: () => persistAudio(idx),
+          clearCheckpoint: () => clearCheckpoints(idx, mode, persister),
+          translateTexts: sentenceModeTranslator(),
+          onResume: ({ resuming, startIndex, totalSegments }) => {
+            if (resuming) {
+              progressTitle.textContent =
+                `继续生成 ${i + 1}/${readyToGenerate.length}: ${ch.title}（从第 ${startIndex}/${totalSegments} 段接着做）`;
+            }
+          },
+          onStatus: (msg) => { progressText.textContent = msg; },
+          onProgress: (current, segTotal) => {
+            tracker.advance(i + current / segTotal);
+          },
+          onCheckpoint: (cpData) => recordCheckpoint(idx, cpData, persister),
+        });
+        // A cancel aborts the whole batch; one chapter's failure does not.
+        if (result.cancelled) throw result.error;
+        if (result.error) {
+          failures.push({ chapter: ch.title, phase: 'generate', error: result.error.message });
         }
         tracker.advance(i + 1);
         updateChapterRow(idx);
