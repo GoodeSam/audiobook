@@ -5,6 +5,7 @@ import {
   buildChapterSegments,
   buildSentenceModeSegments,
   getBeepBlob,
+  generateChapterAudio,
 } from './edge-tts.js';
 
 describe('stripMarkdown', () => {
@@ -285,5 +286,253 @@ describe('getBeepBlob', () => {
     expect(a.type).toBe('audio/mpeg');
     expect(a.size).toBeGreaterThan(2000);
     expect(a.size).toBeLessThan(10000);
+  });
+});
+
+// ── generateChapterAudio: checkpoint integrity ──
+//
+// Root cause guard. `audioBlobs.length = 0` at the end of generateChapterAudio
+// mutated the SAME array handed to the last onCheckpoint call by reference.
+// On the happy path main.js deletes the checkpoint right after, so it was
+// invisible — but if anything threw between the return and that delete, the
+// surviving checkpoint claimed completedIndex=N while holding zero blobs, and
+// resuming silently dropped the first N segments of the chapter.
+
+describe('generateChapterAudio checkpoints', () => {
+  /** Deterministic stand-in for the Edge TTS WebSocket call. */
+  // `failAt` counts SEGMENTS, not calls — once that segment is reached it
+  // fails on every attempt, so the built-in retry loop cannot mask it.
+  function fakeSynth({ failAt = null } = {}) {
+    let done = 0;
+    return vi.fn(async (text) => {
+      if (failAt !== null && done >= failAt) throw new Error('Edge TTS request timed out');
+      done++;
+      return new Blob([`audio:${text}`], { type: 'audio/mpeg' });
+    });
+  }
+
+  const THREE_PARAS = 'First para.\n\nSecond para.\n\nThird para.';
+
+  it('hands each checkpoint an independent snapshot of the blobs', async () => {
+    const checkpoints = [];
+    await generateChapterAudio({
+      originalText: THREE_PARAS,
+      audioMode: 'original',
+      synthesize: fakeSynth(),
+      onCheckpoint: (cp) => checkpoints.push(cp),
+    });
+
+    expect(checkpoints.length).toBe(3);
+    // Each checkpoint must still hold exactly the blobs it had at the time.
+    expect(checkpoints[0].audioBlobs.length).toBe(1);
+    expect(checkpoints[1].audioBlobs.length).toBe(2);
+    expect(checkpoints[2].audioBlobs.length).toBe(3);
+  });
+
+  it('does not empty the last checkpoint when the chapter completes', async () => {
+    let last = null;
+    await generateChapterAudio({
+      originalText: THREE_PARAS,
+      audioMode: 'original',
+      synthesize: fakeSynth(),
+      onCheckpoint: (cp) => { last = cp; },
+    });
+
+    expect(last.completedIndex).toBe(3);
+    expect(last.audioBlobs.length).toBe(3); // was 0 before the fix
+  });
+
+  it('keeps a usable checkpoint when synthesis fails partway', async () => {
+    let last = null;
+    await expect(generateChapterAudio({
+      originalText: THREE_PARAS,
+      audioMode: 'original',
+      synthesize: fakeSynth({ failAt: 2 }),
+      onCheckpoint: (cp) => { last = cp; },
+    })).rejects.toThrow();
+
+    expect(last.completedIndex).toBe(2);
+    expect(last.audioBlobs.length).toBe(2);
+  });
+
+  it('resumes from a checkpoint without re-synthesizing earlier segments', async () => {
+    const synth = fakeSynth();
+    const priorBlobs = [new Blob(['a']), new Blob(['b'])];
+
+    const { blob } = await generateChapterAudio({
+      originalText: THREE_PARAS,
+      audioMode: 'original',
+      synthesize: synth,
+      startIndex: 2,
+      existingBlobs: priorBlobs,
+    });
+
+    expect(synth).toHaveBeenCalledTimes(1); // only the 3rd segment
+    expect(blob.size).toBeGreaterThan(0);
+  });
+
+  it('records the audio mode on the checkpoint so a resume cannot cross modes', async () => {
+    let last = null;
+    await generateChapterAudio({
+      originalText: THREE_PARAS,
+      audioMode: 'original',
+      synthesize: fakeSynth(),
+      onCheckpoint: (cp) => { last = cp; },
+    });
+
+    expect(last.audioMode).toBe('original');
+  });
+});
+
+// ── Validated resume ──
+//
+// Only generateChapterAudio knows the chapter's real segment count, so it is
+// the only place a stored checkpoint can be proven compatible. Handing it
+// `checkpoint` instead of raw startIndex/existingBlobs makes a stale or
+// cross-mode checkpoint degrade to a clean run rather than splice two
+// different segment lists into one MP3.
+
+describe('generateChapterAudio validated resume', () => {
+  function fakeSynth() {
+    return vi.fn(async (text) => new Blob([`audio:${text}`], { type: 'audio/mpeg' }));
+  }
+
+  const THREE_PARAS = 'First para.\n\nSecond para.\n\nThird para.';
+  const goodCp = (n, total, mode = 'original') => ({
+    completedIndex: n,
+    totalSegments: total,
+    audioMode: mode,
+    audioBlobs: Array.from({ length: n }, (_, i) => new Blob([`old${i}`])),
+  });
+
+  it('resumes from a matching checkpoint', async () => {
+    const synth = fakeSynth();
+    let decision = null;
+
+    await generateChapterAudio({
+      originalText: THREE_PARAS,
+      audioMode: 'original',
+      synthesize: synth,
+      checkpoint: goodCp(2, 3),
+      onResume: (d) => { decision = d; },
+    });
+
+    expect(synth).toHaveBeenCalledTimes(1);
+    expect(decision).toEqual({ resuming: true, startIndex: 2, totalSegments: 3 });
+  });
+
+  it('ignores a checkpoint recorded for a different audio mode', async () => {
+    const synth = fakeSynth();
+    let decision = null;
+
+    await generateChapterAudio({
+      originalText: THREE_PARAS,
+      audioMode: 'original',
+      synthesize: synth,
+      checkpoint: goodCp(2, 3, 'bilingual'),
+      onResume: (d) => { decision = d; },
+    });
+
+    expect(synth).toHaveBeenCalledTimes(3); // full regeneration
+    expect(decision.resuming).toBe(false);
+  });
+
+  it('ignores a checkpoint whose segment count no longer matches the chapter', async () => {
+    const synth = fakeSynth();
+
+    await generateChapterAudio({
+      originalText: THREE_PARAS,
+      audioMode: 'original',
+      synthesize: synth,
+      checkpoint: goodCp(2, 99),
+    });
+
+    expect(synth).toHaveBeenCalledTimes(3);
+  });
+
+  it('ignores a checkpoint that claims progress but holds no blobs', async () => {
+    const synth = fakeSynth();
+
+    await generateChapterAudio({
+      originalText: THREE_PARAS,
+      audioMode: 'original',
+      synthesize: synth,
+      checkpoint: { completedIndex: 2, totalSegments: 3, audioMode: 'original', audioBlobs: [] },
+    });
+
+    expect(synth).toHaveBeenCalledTimes(3);
+  });
+
+  it('reports a clean start when there is no checkpoint at all', async () => {
+    let decision = null;
+    await generateChapterAudio({
+      originalText: THREE_PARAS,
+      audioMode: 'original',
+      synthesize: fakeSynth(),
+      onResume: (d) => { decision = d; },
+    });
+
+    expect(decision).toEqual({ resuming: false, startIndex: 0, totalSegments: 3 });
+  });
+});
+
+describe('generateChapterAudio checkpoint backpressure', () => {
+  it('waits for an async onCheckpoint before synthesizing the next segment', async () => {
+    // Without this, IndexedDB writes fire-and-forget: two can be in flight at
+    // once and a slow earlier write can land after a later one, leaving a
+    // stale record on disk. Awaiting also bounds the write queue.
+    const order = [];
+    let releaseWrite;
+    const gate = new Promise((r) => { releaseWrite = r; });
+    let firstCheckpoint = true;
+
+    const promise = generateChapterAudio({
+      originalText: 'First para.\n\nSecond para.',
+      audioMode: 'original',
+      synthesize: async (text) => {
+        order.push(`synth:${text}`);
+        return new Blob([text], { type: 'audio/mpeg' });
+      },
+      onCheckpoint: async () => {
+        if (!firstCheckpoint) return;
+        firstCheckpoint = false;
+        order.push('write:start');
+        await gate;
+        order.push('write:end');
+      },
+    });
+
+    // Let the first segment + its checkpoint start, then confirm the second
+    // segment has NOT begun while the write is outstanding.
+    await new Promise(r => setTimeout(r, 10));
+    expect(order).toEqual(['synth:First para.', 'write:start']);
+
+    releaseWrite();
+    await promise;
+
+    expect(order).toEqual([
+      'synth:First para.', 'write:start', 'write:end', 'synth:Second para.',
+    ]);
+  });
+
+  it('does not fail when onCheckpoint is synchronous', async () => {
+    const seen = [];
+    await generateChapterAudio({
+      originalText: 'One.\n\nTwo.',
+      audioMode: 'original',
+      synthesize: async (t) => new Blob([t]),
+      onCheckpoint: (cp) => { seen.push(cp.completedIndex); },
+    });
+    expect(seen).toEqual([1, 2]);
+  });
+
+  it('continues generating when a checkpoint write rejects', async () => {
+    const { blob } = await generateChapterAudio({
+      originalText: 'One.\n\nTwo.',
+      audioMode: 'original',
+      synthesize: async (t) => new Blob([t]),
+      onCheckpoint: async () => { throw new Error('QuotaExceededError'); },
+    });
+    expect(blob.size).toBeGreaterThan(0);
   });
 });

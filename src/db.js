@@ -2,17 +2,19 @@
  * IndexedDB persistence layer.
  *
  * Stores everything the mobile app needs to work offline and across sessions:
- *   - users:    listener profiles on this device
- *   - books:    parsed books (chapters + translations)
- *   - audio:    generated per-chapter MP3 blobs + playback timelines
- *   - progress: per-user, per-chapter listening position and history
+ *   - users:            listener profiles on this device
+ *   - books:            parsed books (chapters + translations)
+ *   - audio:            generated per-chapter MP3 blobs + playback timelines
+ *   - audioCheckpoints: PARTIAL per-chapter audio, so an interrupted run can
+ *                       resume instead of restarting from segment 0
+ *   - progress:         per-user, per-chapter listening position and history
  *
  * All functions are promise-based thin wrappers; callers should treat
  * failures as non-fatal (the app still works in-memory without persistence).
  */
 
 const DB_NAME = 'audiobook-app';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let _dbPromise = null;
 
@@ -43,6 +45,14 @@ export function openDatabase() {
         const s = db.createObjectStore('audio', { keyPath: ['bookId', 'chapterIndex', 'audioMode'] });
         s.createIndex('bookId', 'bookId');
         s.createIndex('bookId_chapterIndex', ['bookId', 'chapterIndex']);
+      }
+      if (!db.objectStoreNames.contains('audioCheckpoints')) {
+        // v4: partial chapter audio. Keyed by mode as well as chapter so an
+        // interrupted `bilingual` run can never hand its blobs to `original`.
+        const s = db.createObjectStore('audioCheckpoints', {
+          keyPath: ['bookId', 'chapterIndex', 'audioMode'],
+        });
+        s.createIndex('bookId', 'bookId');
       }
       if (!db.objectStoreNames.contains('progress')) {
         const s = db.createObjectStore('progress', { keyPath: ['userId', 'bookId', 'chapterIndex'] });
@@ -128,8 +138,8 @@ export async function listBooks() {
 export async function deleteBook(bookId) {
   const db = await openDatabase();
   await tx(db, 'books', 'readwrite', s => s.delete(bookId));
-  // Cascade: audio + all users' progress for this book
-  for (const store of ['audio', 'progress']) {
+  // Cascade: audio, partial audio, and all users' progress for this book
+  for (const store of ['audio', 'audioCheckpoints', 'progress']) {
     const t = db.transaction(store, 'readwrite');
     const idx = t.objectStore(store).index('bookId');
     const keys = await reqToPromise(idx.getAllKeys(bookId));
@@ -165,6 +175,37 @@ export async function getBookAudio(bookId) {
 export async function deleteChapterAudioVariant(bookId, chapterIndex, audioMode) {
   const db = await openDatabase();
   await tx(db, 'audio', 'readwrite', s => s.delete([bookId, chapterIndex, audioMode || 'original']));
+}
+
+// ── Audio checkpoints (partial chapters) ──
+// A chapter's synthesized segments, written every N segments while generation
+// runs. Without this the segments existed only in the JS heap, so a reload or
+// a tab discard threw away every one of them and the retry restarted at zero.
+// Superseded by the `audio` record once the chapter finishes, then deleted.
+
+export async function saveAudioCheckpoint(bookId, chapterIndex, checkpoint) {
+  const db = await openDatabase();
+  await tx(db, 'audioCheckpoints', 'readwrite', s => s.put({
+    bookId,
+    chapterIndex,
+    audioMode: checkpoint.audioMode,
+    completedIndex: checkpoint.completedIndex,
+    totalSegments: checkpoint.totalSegments,
+    audioBlobs: checkpoint.audioBlobs,
+    updatedAt: Date.now(),
+  }));
+}
+
+/** Every partial-chapter checkpoint stored for a book. */
+export async function getBookAudioCheckpoints(bookId) {
+  const db = await openDatabase();
+  const idx = db.transaction('audioCheckpoints').objectStore('audioCheckpoints').index('bookId');
+  return reqToPromise(idx.getAll(bookId));
+}
+
+export async function deleteAudioCheckpoint(bookId, chapterIndex, audioMode) {
+  const db = await openDatabase();
+  await tx(db, 'audioCheckpoints', 'readwrite', s => s.delete([bookId, chapterIndex, audioMode]));
 }
 
 // ── Listening progress ──

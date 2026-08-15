@@ -27,8 +27,51 @@ export function createAppState() {
     working: false,         // true while handleFile is parsing an EPUB
     selectedChapters: new Set(),
     translationCheckpoints: {},  // chapterIndex -> { completedIndex, translatedParagraphs, totalParagraphs }
-    audioCheckpoints: {},        // chapterIndex -> { completedIndex, audioBlobs, totalSegments }
+    // chapterIndex -> audioMode -> { completedIndex, audioBlobs, totalSegments, audioMode }
+    // Keyed by mode as well as chapter: a chapter interrupted in `bilingual`
+    // must not hand its blobs to an `original` run, whose segment list is a
+    // completely different length.
+    audioCheckpoints: {},
   };
+}
+
+/** Store one chapter/mode's in-progress audio checkpoint. */
+export function setAudioCheckpoint(state, chapterIndex, audioMode, checkpoint) {
+  if (!state.audioCheckpoints[chapterIndex]) state.audioCheckpoints[chapterIndex] = {};
+  state.audioCheckpoints[chapterIndex][audioMode] = checkpoint;
+}
+
+/** Retrieve one chapter/mode's checkpoint, or null. */
+export function getAudioCheckpoint(state, chapterIndex, audioMode) {
+  return state.audioCheckpoints[chapterIndex]?.[audioMode] ?? null;
+}
+
+/** Drop one chapter/mode's checkpoint, leaving the chapter's other modes alone. */
+export function clearAudioCheckpoint(state, chapterIndex, audioMode) {
+  const forChapter = state.audioCheckpoints[chapterIndex];
+  if (!forChapter) return;
+  delete forChapter[audioMode];
+  if (Object.keys(forChapter).length === 0) delete state.audioCheckpoints[chapterIndex];
+}
+
+/**
+ * The furthest-along interrupted mode for a chapter, for the "已中断 (127/340)"
+ * row badge — the signal that was missing entirely, which is why a dead run
+ * looked identical to a finished one.
+ *
+ * @returns {{audioMode: string, completedIndex: number, totalSegments: number}|null}
+ */
+export function audioCheckpointSummary(state, chapterIndex) {
+  const forChapter = state.audioCheckpoints[chapterIndex];
+  if (!forChapter) return null;
+  let best = null;
+  for (const [audioMode, cp] of Object.entries(forChapter)) {
+    if (!cp || !(cp.completedIndex > 0)) continue;
+    if (!best || cp.completedIndex > best.completedIndex) {
+      best = { audioMode, completedIndex: cp.completedIndex, totalSegments: cp.totalSegments };
+    }
+  }
+  return best;
 }
 
 /**

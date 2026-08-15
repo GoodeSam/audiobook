@@ -3,6 +3,7 @@ import {
   msGetAuthToken,
   translateText,
   translateBatch,
+  translateTexts,
   translateChapter,
   cancelTranslation,
   resetTranslationState,
@@ -392,5 +393,192 @@ describe('translateChapter batching', () => {
     expect(result).toContain('# 标题'); // Heading translated with # preserved
     expect(result).toContain('更多。');
     expect(fetchFn.calls.length).toBe(2); // 1 auth + 1 batch
+  });
+});
+
+// ── Batch-level salvage (resumability) ──
+//
+// Root cause of "translation restarts from scratch": translateTexts collected
+// every batch into a local array and only returned at the end, so the caller
+// could not persist anything until ALL batches succeeded. A 1500-sentence
+// chapter is 60 batches — failing on batch 40 discarded 1000 good sentences.
+
+describe('translateTexts batch salvage', () => {
+  beforeEach(() => {
+    _clearTokenCache();
+    resetTranslationState();
+  });
+
+  /** Auth once, then one response per translate batch. */
+  function batchingFetch(batchResponses) {
+    let translateCalls = 0;
+    const fn = async (url) => {
+      if (String(url).includes('/translate/auth')) return okTextResponse('token');
+      const resp = batchResponses[translateCalls++];
+      if (!resp) throw new Error('unexpected extra batch call');
+      return resp;
+    };
+    return fn;
+  }
+
+  const zh = (n) => okJsonResponse(
+    Array.from({ length: n }, (_, i) => ({ translations: [{ text: `译${i}` }] }))
+  );
+
+  it('reports each successful batch through onBatch before finishing', async () => {
+    const texts = Array.from({ length: 30 }, (_, i) => `s${i}`);
+    const fetchFn = batchingFetch([zh(25), zh(5)]);
+    const seen = [];
+
+    await translateTexts(texts, 'en', 'zh-Hans', {
+      fetchFn,
+      onBatch: (batchTexts, translations, offset) => {
+        seen.push({ count: batchTexts.length, translations: translations.length, offset });
+      },
+    });
+
+    expect(seen).toEqual([
+      { count: 25, translations: 25, offset: 0 },
+      { count: 5, translations: 5, offset: 25 },
+    ]);
+  });
+
+  it('keeps earlier batches reported when a later batch fails', async () => {
+    const texts = Array.from({ length: 60 }, (_, i) => `s${i}`);
+    // batch 1 ok, batch 2 ok, batch 3 hard-fails (400 is non-retryable)
+    const fetchFn = batchingFetch([zh(25), zh(25), errorResponse(400)]);
+    const salvaged = [];
+
+    await expect(
+      translateTexts(texts, 'en', 'zh-Hans', {
+        fetchFn,
+        onBatch: (batchTexts, translations, offset) => {
+          batchTexts.forEach((t, i) => salvaged.push([offset + i, translations[i]]));
+        },
+      })
+    ).rejects.toThrow();
+
+    // The 50 sentences that DID translate must survive the failure.
+    expect(salvaged.length).toBe(50);
+    expect(salvaged[0]).toEqual([0, '译0']);
+    expect(salvaged[49]).toEqual([49, '译24']);
+  });
+
+  it('passes the original texts alongside their translations', async () => {
+    const fetchFn = batchingFetch([zh(3)]);
+    let received = null;
+
+    await translateTexts(['a', 'b', 'c'], 'en', 'zh-Hans', {
+      fetchFn,
+      onBatch: (batchTexts) => { received = batchTexts; },
+    });
+
+    expect(received).toEqual(['a', 'b', 'c']);
+  });
+});
+
+// ── Chapter translation through the persistent cache ──
+//
+// translateChapter never consulted the IndexedDB `translations` store — only
+// the sentence-mode translator did. So re-running a chapter after any failure
+// re-translated every paragraph and re-hit the 429 rate limit, which is why
+// "regenerate" felt like starting from zero even when work had been done.
+
+describe('translateChapter translation cache', () => {
+  beforeEach(() => {
+    _clearTokenCache();
+    resetTranslationState();
+  });
+
+  function fakeCache(seed = {}) {
+    const store = new Map(Object.entries(seed));
+    return {
+      store,
+      getCached: async (key) => (store.has(key) ? store.get(key) : null),
+      putCached: async (key, text) => { store.set(key, text); },
+    };
+  }
+
+  const key = (t) => `en|zh-Hans|${t}`;
+
+  it('skips the API entirely when every paragraph is cached', async () => {
+    const cache = fakeCache({ [key('One.')]: '一。', [key('Two.')]: '二。' });
+    const fetchFn = mockFetch([okTextResponse('token')]);
+
+    const result = await translateChapter('One.\n\nTwo.', 'en', 'zh-Hans', {
+      fetchFn, getCached: cache.getCached, putCached: cache.putCached,
+    });
+
+    expect(result).toBe('一。\n\n二。');
+    expect(fetchFn.calls.length).toBe(0); // not even an auth call
+  });
+
+  it('sends only uncached paragraphs to the API', async () => {
+    const cache = fakeCache({ [key('One.')]: '一。' });
+    const fetchFn = mockFetch([
+      okTextResponse('token'),
+      okJsonResponse([{ translations: [{ text: '二。' }] }]),
+    ]);
+
+    const result = await translateChapter('One.\n\nTwo.', 'en', 'zh-Hans', {
+      fetchFn, getCached: cache.getCached, putCached: cache.putCached,
+    });
+
+    expect(result).toBe('一。\n\n二。');
+    const body = JSON.parse(fetchFn.calls[1].opts.body);
+    expect(body).toEqual([{ Text: 'Two.' }]);
+  });
+
+  it('writes freshly translated paragraphs into the cache', async () => {
+    const cache = fakeCache();
+    const fetchFn = mockFetch([
+      okTextResponse('token'),
+      okJsonResponse([{ translations: [{ text: '一。' }] }]),
+    ]);
+
+    await translateChapter('One.', 'en', 'zh-Hans', {
+      fetchFn, getCached: cache.getCached, putCached: cache.putCached,
+    });
+
+    expect(cache.store.get(key('One.'))).toBe('一。');
+  });
+
+  it('caches heading text without the # prefix so it is reusable', async () => {
+    const cache = fakeCache();
+    const fetchFn = mockFetch([
+      okTextResponse('token'),
+      okJsonResponse([{ translations: [{ text: '标题' }] }]),
+    ]);
+
+    const result = await translateChapter('# Title', 'en', 'zh-Hans', {
+      fetchFn, getCached: cache.getCached, putCached: cache.putCached,
+    });
+
+    expect(result).toBe('# 标题');
+    expect(cache.store.get(key('Title'))).toBe('标题');
+  });
+
+  it('still works when no cache is supplied at all', async () => {
+    const fetchFn = mockFetch([
+      okTextResponse('token'),
+      okJsonResponse([{ translations: [{ text: '一。' }] }]),
+    ]);
+
+    expect(await translateChapter('One.', 'en', 'zh-Hans', { fetchFn })).toBe('一。');
+  });
+
+  it('degrades to translating when the cache backend throws', async () => {
+    const fetchFn = mockFetch([
+      okTextResponse('token'),
+      okJsonResponse([{ translations: [{ text: '一。' }] }]),
+    ]);
+
+    const result = await translateChapter('One.', 'en', 'zh-Hans', {
+      fetchFn,
+      getCached: async () => { throw new Error('IndexedDB unavailable'); },
+      putCached: async () => { throw new Error('QuotaExceededError'); },
+    });
+
+    expect(result).toBe('一。');
   });
 });

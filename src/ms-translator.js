@@ -182,11 +182,16 @@ export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}
  * @param {string[]} texts
  * @param {string} from - Source language ('auto' allowed).
  * @param {string} to - Target language.
- * @param {object} [opts] - { fetchFn, onWait, onChunk(done,total) }
+ * @param {object} [opts] - { fetchFn, onWait, onChunk(done,total), onBatch(texts, translations, offset) }
+ * @param {Function} [opts.onBatch] - Called after EACH successful batch with
+ *   that batch's source texts, its translations, and its offset into `texts`.
+ *   Callers persist here so a later batch failing never discards earlier work
+ *   — without it, a 60-batch chapter failing on batch 40 threw away 39 good
+ *   batches and the retry restarted from sentence 1.
  * @returns {Promise<string[]>} translations, same order as texts.
  */
 export async function translateTexts(texts, from, to, opts = {}) {
-  const { fetchFn = fetch, onWait, onChunk, onFallback } = opts;
+  const { fetchFn = fetch, onWait, onChunk, onFallback, onBatch } = opts;
   _cancelled = false;
   _abortController = new AbortController();
   try {
@@ -194,8 +199,13 @@ export async function translateTexts(texts, from, to, opts = {}) {
     for (let i = 0; i < texts.length; i += BATCH_SIZE) {
       if (_cancelled) throw new Error('Translation cancelled');
       if (i > 0) await abortableSleep(BATCH_INTERVAL_MS);
-      const chunk = await translateBatch(texts.slice(i, i + BATCH_SIZE), from, to, fetchFn, { onWait, onFallback });
+      const batchTexts = texts.slice(i, i + BATCH_SIZE);
+      const chunk = await translateBatch(batchTexts, from, to, fetchFn, { onWait, onFallback });
       out.push(...chunk);
+      // Report before the next batch can fail — this is the salvage point.
+      if (onBatch) {
+        try { onBatch(batchTexts, chunk, i); } catch { /* persistence is best-effort */ }
+      }
       if (onChunk) onChunk(Math.min(i + BATCH_SIZE, texts.length), texts.length);
     }
     _abortController = null;
@@ -237,7 +247,24 @@ export async function translateChapter(markdown, from, to, options = {}) {
     startIndex = 0,
     existingTranslations = [],
     onCheckpoint,
+    // Persistent translation cache. Without it every retry re-translated the
+    // whole chapter and re-hit the 429 limit, which is what made "regenerate"
+    // look like it was starting from zero.
+    getCached,
+    putCached,
   } = options;
+
+  const cacheKey = (text) => `${from}|${to}|${text}`;
+  const readCache = async (text) => {
+    if (!getCached) return null;
+    try { return (await getCached(cacheKey(text))) ?? null; } catch { return null; }
+  };
+  const writeCache = (text, translated) => {
+    if (!putCached) return;
+    Promise.resolve()
+      .then(() => putCached(cacheKey(text), translated))
+      .catch(() => { /* best-effort: quota, private mode, no IndexedDB */ });
+  };
 
   const paragraphs = splitParagraphs(markdown);
   const total = paragraphs.filter(p => !shouldSkipParagraph(p)).length;
@@ -264,6 +291,22 @@ export async function translateChapter(markdown, from, to, options = {}) {
     }
   }
 
+  // Fill in whatever the persistent cache already knows before hitting the
+  // network, so a retry only pays for the paragraphs that never landed.
+  if (getCached) {
+    const hits = await Promise.all(
+      entries.map(e => (e.type === 'translate' ? readCache(e.text) : null))
+    );
+    hits.forEach((hit, i) => {
+      if (hit !== null && hit !== undefined) {
+        entries[i].result = hit;
+        entries[i].fromCache = true;
+        progress++;
+        if (onProgress) onProgress(progress, total);
+      }
+    });
+  }
+
   // Process in batches — only translatable entries go to the API
   let batchTexts = [];
   let batchEntryIndices = [];
@@ -283,7 +326,10 @@ export async function translateChapter(markdown, from, to, options = {}) {
       },
     });
     for (let r = 0; r < results.length; r++) {
-      entries[batchEntryIndices[r]].result = results[r];
+      const entry = entries[batchEntryIndices[r]];
+      entry.result = results[r];
+      // Written per batch, so a later batch failing never discards this one.
+      writeCache(entry.text, results[r]);
       progress++;
       if (onProgress) onProgress(progress, total);
     }
@@ -310,6 +356,7 @@ export async function translateChapter(markdown, from, to, options = {}) {
     const entry = entries[e];
 
     if (entry.type === 'skip') continue;
+    if (entry.fromCache) continue; // already satisfied from the persistent cache
 
     batchTexts.push(entry.text);
     batchEntryIndices.push(e);

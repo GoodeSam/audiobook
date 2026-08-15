@@ -16,6 +16,7 @@ import { convertNumbersToChinese } from './number-to-chinese.js';
 import { buildTimeline, splitIntoSentences } from './audio-timeline.js';
 import { BEEP_MP3_BASE64 } from './beep-data.js';
 import { cancelTranslation } from './ms-translator.js';
+import { resumePlan } from './audio-checkpoint-store.js';
 
 export { splitIntoSentences };
 
@@ -381,12 +382,19 @@ export async function generateChapterAudio(options = {}) {
     speechRateEn = 0,
     speechRateZh = 0,
     onProgress,
-    startIndex = 0,
     existingBlobs = [],
     onCheckpoint,
     translateTexts,
     onStatus,
+    // A stored checkpoint. Preferred over raw startIndex/existingBlobs because
+    // only this function knows the chapter's real segment count, which is what
+    // proves the checkpoint still lines up with the content.
+    checkpoint = null,
+    onResume,
+    // Injectable so the resume logic is testable without a live WebSocket.
+    synthesize = synthesizeText,
   } = options;
+  let startIndex = options.startIndex ?? 0;
 
   const segments = audioMode === 'en-zh-en-sentence'
     ? await buildSentenceModeSegments({ originalText, translateTexts, onStatus })
@@ -395,7 +403,36 @@ export async function generateChapterAudio(options = {}) {
     throw new Error(`No content to synthesize in "${audioMode}" mode. Translation may be required.`);
   }
   const total = segments.length;
-  const audioBlobs = [...existingBlobs];
+
+  // A checkpoint that does not match this mode and segment count is discarded
+  // rather than trusted — resuming across modes produced a spliced MP3 whose
+  // timeline no longer matched the text.
+  const plan = checkpoint
+    ? resumePlan(checkpoint, { audioMode, totalSegments: total })
+    : { resuming: startIndex > 0, startIndex, existingBlobs };
+  startIndex = plan.startIndex;
+  const audioBlobs = [...plan.existingBlobs];
+  if (onResume) onResume({ resuming: plan.resuming, startIndex: plan.startIndex, totalSegments: total });
+
+  // Checkpoints must own their blobs. Handing out the live accumulator meant
+  // the `audioBlobs.length = 0` cleanup below retroactively emptied the last
+  // checkpoint — a checkpoint claiming completedIndex=N while holding zero
+  // blobs makes a resume silently drop the chapter's first N segments.
+  // audioMode rides along so a resume can refuse to cross modes.
+  // Awaited by the loop: without backpressure two IndexedDB writes can be in
+  // flight at once and a slow earlier one can land after a later one, leaving
+  // a stale record on disk. A rejected write must not stop synthesis.
+  const emitCheckpoint = async (completedIndex) => {
+    if (!onCheckpoint) return;
+    try {
+      await onCheckpoint({
+        completedIndex,
+        totalSegments: total,
+        audioMode,
+        audioBlobs: [...audioBlobs],
+      });
+    } catch { /* persistence is best-effort — the audio is still correct */ }
+  };
 
   for (let i = startIndex; i < segments.length; i++) {
     if (_cancelled) throw new Error('Audio generation cancelled');
@@ -404,7 +441,7 @@ export async function generateChapterAudio(options = {}) {
     if (seg.lang === 'beep') {
       audioBlobs.push(getBeepBlob());
       if (onProgress) onProgress(i + 1, total);
-      if (onCheckpoint) onCheckpoint({ completedIndex: i + 1, totalSegments: total, audioBlobs });
+      await emitCheckpoint(i + 1);
       continue;
     }
     let voice = seg.lang === 'zh' ? voiceZh : voiceEn;
@@ -413,7 +450,7 @@ export async function generateChapterAudio(options = {}) {
     let blob;
     for (let attempt = 0; attempt <= SYNTH_MAX_RETRIES; attempt++) {
       try {
-        blob = await synthesizeText(seg.text, { voice, speechRate });
+        blob = await synthesize(seg.text, { voice, speechRate });
         break;
       } catch (err) {
         // On "no audio" error, try the other voice as fallback
@@ -422,7 +459,7 @@ export async function generateChapterAudio(options = {}) {
           const fallbackVoice = voice === voiceZh ? voiceEn : voiceZh;
           const fallbackRate = voice === voiceZh ? speechRateEn : speechRateZh;
           try {
-            blob = await synthesizeText(seg.text, { voice: fallbackVoice, speechRate: fallbackRate });
+            blob = await synthesize(seg.text, { voice: fallbackVoice, speechRate: fallbackRate });
             break;
           } catch { /* Fall through to normal retry */ }
         }
@@ -433,7 +470,7 @@ export async function generateChapterAudio(options = {}) {
 
     audioBlobs.push(blob);
     if (onProgress) onProgress(i + 1, total);
-    if (onCheckpoint) onCheckpoint({ completedIndex: i + 1, totalSegments: total, audioBlobs });
+    await emitCheckpoint(i + 1);
   }
 
   const finalBlob = new Blob(audioBlobs, { type: 'audio/mpeg' });

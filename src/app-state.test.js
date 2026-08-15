@@ -5,7 +5,15 @@
  * preventing the editor from becoming unresponsive due to stale flags.
  */
 import { describe, it, expect } from 'vitest';
-import { createAppState, resetStateForNewBook, resetStateOnError } from './app-state.js';
+import {
+  createAppState,
+  resetStateForNewBook,
+  resetStateOnError,
+  setAudioCheckpoint,
+  getAudioCheckpoint,
+  clearAudioCheckpoint,
+  audioCheckpointSummary,
+} from './app-state.js';
 
 describe('createAppState', () => {
   it('initializes with generating set to false', () => {
@@ -155,5 +163,92 @@ describe('working flag prevents concurrent uploads', () => {
     resetStateOnError(state);
     const wouldProceed = !state.working;
     expect(wouldProceed).toBe(true);
+  });
+});
+
+// ── Audio checkpoints keyed by (chapter, audio mode) ──
+//
+// They used to be keyed by chapter index alone, so interrupting a chapter in
+// `bilingual` and then generating it in `original` fed the old mode's blobs in
+// as `existingBlobs` and the old completedIndex as `startIndex` — producing a
+// spliced MP3 whose timeline no longer matched the text.
+
+describe('audio checkpoint accessors', () => {
+  const cp = (n, total, mode) => ({
+    completedIndex: n, totalSegments: total, audioMode: mode, audioBlobs: [],
+  });
+
+  it('stores and retrieves a checkpoint per mode', () => {
+    const state = createAppState();
+    setAudioCheckpoint(state, 3, 'original', cp(10, 40, 'original'));
+
+    expect(getAudioCheckpoint(state, 3, 'original').completedIndex).toBe(10);
+  });
+
+  it('does not leak a checkpoint from one mode into another', () => {
+    const state = createAppState();
+    setAudioCheckpoint(state, 3, 'bilingual', cp(10, 40, 'bilingual'));
+
+    expect(getAudioCheckpoint(state, 3, 'original')).toBe(null);
+  });
+
+  it('keeps checkpoints for two modes of the same chapter side by side', () => {
+    const state = createAppState();
+    setAudioCheckpoint(state, 3, 'original', cp(10, 40, 'original'));
+    setAudioCheckpoint(state, 3, 'bilingual', cp(25, 80, 'bilingual'));
+
+    expect(getAudioCheckpoint(state, 3, 'original').completedIndex).toBe(10);
+    expect(getAudioCheckpoint(state, 3, 'bilingual').completedIndex).toBe(25);
+  });
+
+  it('returns null for a chapter that has no checkpoints at all', () => {
+    expect(getAudioCheckpoint(createAppState(), 7, 'original')).toBe(null);
+  });
+
+  it('clears only the requested mode', () => {
+    const state = createAppState();
+    setAudioCheckpoint(state, 3, 'original', cp(10, 40, 'original'));
+    setAudioCheckpoint(state, 3, 'bilingual', cp(25, 80, 'bilingual'));
+
+    clearAudioCheckpoint(state, 3, 'original');
+
+    expect(getAudioCheckpoint(state, 3, 'original')).toBe(null);
+    expect(getAudioCheckpoint(state, 3, 'bilingual').completedIndex).toBe(25);
+  });
+
+  it('tolerates clearing a checkpoint that was never set', () => {
+    const state = createAppState();
+    expect(() => clearAudioCheckpoint(state, 9, 'original')).not.toThrow();
+  });
+
+  it('summarizes the furthest-along interrupted mode for the chapter row', () => {
+    const state = createAppState();
+    setAudioCheckpoint(state, 3, 'original', cp(10, 40, 'original'));
+    setAudioCheckpoint(state, 3, 'bilingual', cp(60, 80, 'bilingual'));
+
+    expect(audioCheckpointSummary(state, 3)).toEqual({
+      audioMode: 'bilingual', completedIndex: 60, totalSegments: 80,
+    });
+  });
+
+  it('summarizes to null when nothing is interrupted', () => {
+    expect(audioCheckpointSummary(createAppState(), 3)).toBe(null);
+  });
+
+  it('drops the chapter entry once its last mode is cleared', () => {
+    const state = createAppState();
+    setAudioCheckpoint(state, 3, 'original', cp(10, 40, 'original'));
+    clearAudioCheckpoint(state, 3, 'original');
+
+    expect(audioCheckpointSummary(state, 3)).toBe(null);
+  });
+
+  it('is cleared wholesale when a new book is loaded', () => {
+    const state = createAppState();
+    setAudioCheckpoint(state, 3, 'original', cp(10, 40, 'original'));
+
+    resetStateForNewBook(state, { title: 'X', chapters: [] });
+
+    expect(getAudioCheckpoint(state, 3, 'original')).toBe(null);
   });
 });

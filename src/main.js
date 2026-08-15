@@ -16,7 +16,13 @@ import { translateChapter, translateTexts, cancelTranslation, resetTranslationSt
 import { sanitizeFilename, exportMultipleChapters, extractImagesFromMarkdown } from './chapter-export.js';
 import { ProgressTracker } from './progress-tracker.js';
 import { buildBilingualMarkdown } from './bilingual-view.js';
-import { createAppState, resetStateForNewBook, resetStateOnError } from './app-state.js';
+import {
+  createAppState, resetStateForNewBook, resetStateOnError,
+  setAudioCheckpoint, getAudioCheckpoint, clearAudioCheckpoint, audioCheckpointSummary,
+} from './app-state.js';
+import { createCachingTranslator } from './cached-translator.js';
+import { createSegmentPersister } from './audio-checkpoint-store.js';
+import { shouldWarnBeforeUnload, createWakeLock } from './generation-guard.js';
 import { countTranslatableParagraphs } from './paragraph-utils.js';
 import { Player } from './player.js';
 import { formatTime } from './audio-timeline.js';
@@ -24,6 +30,7 @@ import {
   listUsers, createUser,
   saveBook, getBook, listBooks, deleteBook,
   saveChapterAudio, getBookAudio, deleteChapterAudioVariant,
+  saveAudioCheckpoint, getBookAudioCheckpoints, deleteAudioCheckpoint,
   saveProgress, getProgress, getLastPlayed,
   getCachedTranslation, putCachedTranslation,
 } from './db.js';
@@ -366,7 +373,15 @@ function updateConfigSummary() {
   summaryLang.textContent = '→ ' + (langEl ? langEl.textContent : 'Chinese');
 }
 
-audioModeSelect.addEventListener('change', updateConfigSummary);
+audioModeSelect.addEventListener('change', () => {
+  updateConfigSummary();
+  // Resume state is per-mode, so the row badges and the action button must be
+  // re-read against the newly selected mode.
+  if (state.book) {
+    renderChapterList();
+    if (state.activeChapter !== null) updateChapterButtons(state.activeChapter);
+  }
+});
 translateLangSelect.addEventListener('change', updateConfigSummary);
 updateConfigSummary();
 
@@ -409,7 +424,8 @@ function updateChapterStatusBar(idx) {
   const hasTr = !!ch.translatedMarkdown;
   const hasAudio = !!state.audioBlobs[idx];
   const hasTrCp = !!state.translationCheckpoints[idx];
-  const hasAuCp = !!state.audioCheckpoints[idx];
+  const auCp = audioCheckpointSummary(state, idx);
+  const hasAuCp = !!auCp;
 
   if (hasTr && !hasTrCp) {
     statusTranslation.textContent = 'Translated';
@@ -427,8 +443,9 @@ function updateChapterStatusBar(idx) {
     statusAudio.textContent = 'Audio ready';
     statusAudio.className = 'status-badge status-done';
   } else if (hasAuCp) {
-    const cp = state.audioCheckpoints[idx];
-    statusAudio.textContent = `Audio ${cp.completedIndex}/${cp.totalSegments}`;
+    statusAudio.textContent = state.generating
+      ? `Audio ${auCp.completedIndex}/${auCp.totalSegments}`
+      : `已中断 ${auCp.completedIndex}/${auCp.totalSegments}`;
     statusAudio.className = 'status-badge status-partial';
   } else {
     statusAudio.textContent = 'No audio';
@@ -596,8 +613,6 @@ function renderChapterList() {
     li.setAttribute('aria-selected', idx === state.activeChapter ? 'true' : 'false');
     cb.checked = state.selectedChapters.has(idx);
 
-    const hasTrCp = !!state.translationCheckpoints[idx];
-    const hasAuCp = !!state.audioCheckpoints[idx];
     icons.innerHTML = buildStatusLabel(ch, idx);
   }
   updateBulkButtons();
@@ -630,11 +645,21 @@ function buildStatusLabel(ch, idx) {
   }
 
   const hasTrCp = !!state.translationCheckpoints[idx];
-  const hasAuCp = !!state.audioCheckpoints[idx];
+  const auCp = audioCheckpointSummary(state, idx);
   const hasTr = !!ch.translatedMarkdown;
 
   if (hasTrCp) return '<span class="row-status row-status-partial" role="img" aria-label="Translation in progress">Translating...</span>';
-  if (hasAuCp) return '<span class="row-status row-status-partial" role="img" aria-label="Audio in progress">Generating...</span>';
+  if (auCp) {
+    // While idle, a surviving checkpoint means the run DIED partway. Saying
+    // "Generating..." there is what made a dead run look finished; the count
+    // also tells the user resuming is cheap.
+    const partial = state.generating
+      ? '<span class="row-status row-status-partial" role="img" aria-label="Audio in progress">Generating...</span>'
+      : `<span class="row-status row-status-partial" role="img" aria-label="Audio interrupted">⚠️ 已中断 ${auCp.completedIndex}/${auCp.totalSegments}</span>`;
+    // Still show which modes DID finish — a chapter can have one mode done and
+    // another interrupted, and hiding the finished ones misreports the chapter.
+    return partial + buildVariantBadges(idx);
+  }
 
   const statusLabel = hasTr && hasAudio
     ? '<span class="row-status row-status-done" role="img" aria-label="Complete">Ready</span>'
@@ -776,7 +801,10 @@ function updateChapterButtons(idx) {
   const hasTranslation = !!ch.translatedMarkdown;
   const hasAudio = !!state.audioBlobs[idx];
   const hasTranslationCp = !!state.translationCheckpoints[idx];
-  const hasAudioCp = !!state.audioCheckpoints[idx];
+  // The SELECTED mode's checkpoint, not the chapter's furthest-along one — the
+  // button promises an action, and clicking it generates the selected mode.
+  const audioCp = getAudioCheckpoint(state, idx, audioModeSelect.value);
+  const hasAudioCp = !!audioCp;
 
   // Translate button
   if (hasTranslation && !hasTranslationCp) {
@@ -799,8 +827,7 @@ function updateChapterButtons(idx) {
     btnGenerateChapter.classList.add('done');
     btnGenerateChapter.classList.remove('resume');
   } else if (hasAudioCp) {
-    const cp = state.audioCheckpoints[idx];
-    btnGenerateChapter.textContent = `Resume (${cp.completedIndex}/${cp.totalSegments})`;
+    btnGenerateChapter.textContent = `继续生成 (${audioCp.completedIndex}/${audioCp.totalSegments})`;
     btnGenerateChapter.classList.remove('done');
     btnGenerateChapter.classList.add('resume');
   } else {
@@ -919,6 +946,8 @@ async function translateSingleChapter(idx) {
   try {
     resetTranslationState();
     const translated = await translateChapter(ch.markdown, fromLang, toLang, {
+      getCached: getCachedTranslation,
+      putCached: putCachedTranslation,
       startIndex: cp ? cp.completedIndex : 0,
       existingTranslations: cp ? cp.translatedParagraphs : [],
       onProgress: (current, total) => updateProgress(current, total, `Translating: ${current} / ${total} paragraphs`),
@@ -979,6 +1008,8 @@ async function translateMultipleChapters(indices) {
       resetTranslationState();
 
       const translated = await translateChapter(ch.markdown, fromLang, toLang, {
+        getCached: getCachedTranslation,
+        putCached: putCachedTranslation,
         startIndex: tcp ? tcp.completedIndex : 0,
         existingTranslations: tcp ? tcp.translatedParagraphs : [],
         onProgress: (current) => {
@@ -1015,43 +1046,33 @@ function detectSourceLang() {
 
 /**
  * Per-sentence translator used by the en-zh-en-sentence audio mode.
- * Backed by a persistent cache so regenerating audio for the same content
- * never re-hits the rate-limited translation API.
+ *
+ * This mode translates an entire chapter inside generateChapterAudio BEFORE
+ * the first segment is synthesized, and that phase emits no audio checkpoint —
+ * so the translation cache is its only resume point. createCachingTranslator
+ * writes every batch the moment it returns, which is why a 429 at sentence
+ * 1000 now costs one batch instead of all 1000.
  */
 function sentenceModeTranslator() {
-  const from = detectSourceLang();
-  const to = translateLangSelect.value;
-  const keyFor = (text) => `${from}|${to}|${text}`;
-  return async (texts) => {
-    const cached = await Promise.all(
-      texts.map(t => getCachedTranslation(keyFor(t)).catch(() => null))
-    );
-    const missIdx = [];
-    cached.forEach((c, i) => { if (c === null) missIdx.push(i); });
-
-    let fresh = [];
-    if (missIdx.length > 0) {
-      const hits = texts.length - missIdx.length;
-      if (hits > 0) progressText.textContent = `翻译缓存命中 ${hits} 句，还需翻译 ${missIdx.length} 句…`;
-      fresh = await translateTexts(missIdx.map(i => texts[i]), from, to, {
-        onWait: (seconds, attempt) => {
-          progressText.textContent = `⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 进度不会丢失`;
-        },
-        onFallback: () => {
-          progressText.textContent = '⚡ 微软翻译限流 — 已自动切换 Google 翻译继续';
-        },
-        onChunk: (done, total) => {
-          progressText.textContent = `正在逐句翻译 ${done} / ${total} 句…`;
-        },
-      });
-      missIdx.forEach((idx, j) => {
-        putCachedTranslation(keyFor(texts[idx]), fresh[j]).catch(() => {});
-      });
-    }
-
-    let j = 0;
-    return texts.map((_, i) => (cached[i] !== null ? cached[i] : fresh[j++]));
-  };
+  return createCachingTranslator({
+    from: detectSourceLang(),
+    to: translateLangSelect.value,
+    translateTexts,
+    getCached: getCachedTranslation,
+    putCached: putCachedTranslation,
+    onStatus: (msg) => { progressText.textContent = msg; },
+    translateOptions: {
+      onWait: (seconds, attempt) => {
+        progressText.textContent = `⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 已翻译的句子已保存，不会重来`;
+      },
+      onFallback: () => {
+        progressText.textContent = '⚡ 微软翻译限流 — 已自动切换 Google 翻译继续';
+      },
+      onChunk: (done, total) => {
+        progressText.textContent = `正在逐句翻译 ${done} / ${total} 句…`;
+      },
+    },
+  });
 }
 
 // ── Audio generation ──
@@ -1061,7 +1082,7 @@ btnGenerateChapter.addEventListener('click', async () => {
   // Skip if the SELECTED mode is already generated (no checkpoint means complete) —
   // checking audioBlobs alone would block generating a second mode for this chapter.
   const alreadyHasMode = !!state.audioVariants[state.activeChapter]?.[audioModeSelect.value];
-  if (alreadyHasMode && !state.audioCheckpoints[state.activeChapter]) return;
+  if (alreadyHasMode && !getAudioCheckpoint(state, state.activeChapter, audioModeSelect.value)) return;
   await generateSingleChapter(state.activeChapter);
 });
 
@@ -1101,6 +1122,49 @@ async function translateAndGenerateSelected() {
 
 btnTranslateGenerate.addEventListener('click', () => translateAndGenerateSelected());
 
+// ── Resumable generation plumbing ──
+
+const wakeLock = createWakeLock();
+
+/**
+ * Build the resume arguments and the throttled persister for one chapter/mode.
+ *
+ * `resumePlan` refuses any checkpoint that does not match the mode and segment
+ * count, so a stale or cross-mode checkpoint degrades to a clean start instead
+ * of splicing two different segment lists into one MP3.
+ */
+function prepareResume(idx, mode) {
+  const stored = getAudioCheckpoint(state, idx, mode);
+  const persister = createSegmentPersister({
+    save: (cp) => saveAudioCheckpoint(state.bookId, idx, cp),
+    remove: () => deleteAudioCheckpoint(state.bookId, idx, mode),
+    onError: (err, { giveUp }) => {
+      console.warn('Failed to save audio checkpoint:', err);
+      if (giveUp) {
+        showToast('⚠️ 无法保存生成进度（存储空间可能已满）— 本章中断后需要重新生成', 'error', 8000);
+      }
+    },
+  });
+  return { stored, persister };
+}
+
+/**
+ * Feed one checkpoint to both the in-memory state (drives the row badge and a
+ * same-session resume) and the throttled disk writer (survives a reload).
+ */
+function recordCheckpoint(idx, cpData, persister) {
+  setAudioCheckpoint(state, idx, cpData.audioMode, cpData);
+  // Returned so generateChapterAudio can await it — that backpressure is what
+  // keeps disk writes ordered and bounded.
+  return state.bookId ? persister.record(cpData) : undefined;
+}
+
+/** Chapter finished — drop both copies; the full MP3 supersedes them. */
+function clearCheckpoints(idx, mode, persister) {
+  clearAudioCheckpoint(state, idx, mode);
+  if (state.bookId) persister.done();
+}
+
 async function generateSingleChapter(idx) {
   const ch = state.book.chapters[idx];
   const mode = audioModeSelect.value;
@@ -1130,12 +1194,9 @@ async function generateSingleChapter(idx) {
       : tracker.statusText;
   });
 
-  // Resume from checkpoint if available
-  const acp = state.audioCheckpoints[idx];
-  const resumingAudio = acp && acp.completedIndex > 0;
-  showProgress(resumingAudio
-    ? `Resuming audio: ${ch.title} (from segment ${acp.completedIndex})`
-    : `Generating: ${ch.title}`);
+  const { stored, persister } = prepareResume(idx, mode);
+  showProgress(`Generating: ${ch.title}`);
+  await wakeLock.acquire();
 
   try {
     tracker.startPhase('generating', 1);
@@ -1147,29 +1208,39 @@ async function generateSingleChapter(idx) {
       voiceZh: voiceZhSelect.value,
       speechRateEn: parseInt(speedEnRange.value),
       speechRateZh: parseInt(speedZhRange.value),
-      startIndex: acp ? acp.completedIndex : 0,
-      existingBlobs: acp ? acp.audioBlobs : [],
+      checkpoint: stored,
+      onResume: ({ resuming, startIndex, totalSegments }) => {
+        if (resuming) {
+          progressTitle.textContent =
+            `继续生成: ${ch.title}（从第 ${startIndex}/${totalSegments} 段接着做）`;
+        }
+      },
       translateTexts: sentenceModeTranslator(),
       onStatus: (msg) => { progressText.textContent = msg; },
       onProgress: (current, total) => {
         tracker.startPhase('generating', total);
         tracker.advance(current);
       },
-      onCheckpoint: (cpData) => { state.audioCheckpoints[idx] = cpData; },
+      onCheckpoint: (cpData) => recordCheckpoint(idx, cpData, persister),
     });
 
     recordAudioVariant(idx, mode, blob, timeline);
-    delete state.audioCheckpoints[idx]; // Clear checkpoint on success
-    persistAudio(idx);
+    clearCheckpoints(idx, mode, persister);
+    await persistAudio(idx);
     renderChapterList();
     selectChapter(idx);
   } catch (err) {
-    // Checkpoint is preserved in state.audioCheckpoints[idx] for resume
+    // Checkpoint survives in state AND on disk, so the retry resumes.
     if (!err.message.includes('cancelled')) {
       showToast('Audio generation error: ' + err.message, 'error');
     }
+    // Repaint so the row shows "已中断 (n/N)" — without this a dead run was
+    // visually identical to a finished one, which is what made the user think
+    // generation had completed.
+    renderChapterList();
   } finally {
     state.generating = false;
+    await wakeLock.release();
     hideProgress();
   }
 }
@@ -1181,7 +1252,7 @@ async function generateMultipleChapters(indices) {
   const toTranslate = needsTranslation
     ? indices.filter(i => !state.book.chapters[i].translatedMarkdown || state.translationCheckpoints[i])
     : [];
-  const toGenerate = indices.filter(i => !state.audioVariants[i]?.[mode] || state.audioCheckpoints[i]);
+  const toGenerate = indices.filter(i => !state.audioVariants[i]?.[mode] || getAudioCheckpoint(state, i, mode));
 
   // Build weighted phases
   const phases = [];
@@ -1199,6 +1270,7 @@ async function generateMultipleChapters(indices) {
   });
 
   showProgress('Processing chapters...');
+  await wakeLock.acquire();
 
   const failures = [];
 
@@ -1218,6 +1290,8 @@ async function generateMultipleChapters(indices) {
 
         try {
           const translated = await translateChapter(ch.markdown, fromLang, toLang, {
+            getCached: getCachedTranslation,
+            putCached: putCachedTranslation,
             startIndex: tcp ? tcp.completedIndex : 0,
             existingTranslations: tcp ? tcp.translatedParagraphs : [],
             onProgress: (current, paraTotal) => {
@@ -1251,8 +1325,8 @@ async function generateMultipleChapters(indices) {
       for (let i = 0; i < readyToGenerate.length; i++) {
         const idx = readyToGenerate[i];
         const ch = state.book.chapters[idx];
-        const acp = state.audioCheckpoints[idx];
-        progressTitle.textContent = `Generating ${i + 1}/${readyToGenerate.length}: ${ch.title}${acp ? ' (resuming)' : ''}`;
+        const { stored, persister } = prepareResume(idx, mode);
+        progressTitle.textContent = `Generating ${i + 1}/${readyToGenerate.length}: ${ch.title}`;
 
         try {
           const { blob, timeline } = await generateChapterAudio({
@@ -1263,18 +1337,23 @@ async function generateMultipleChapters(indices) {
             voiceZh: voiceZhSelect.value,
             speechRateEn: parseInt(speedEnRange.value),
             speechRateZh: parseInt(speedZhRange.value),
-            startIndex: acp ? acp.completedIndex : 0,
-            existingBlobs: acp ? acp.audioBlobs : [],
+            checkpoint: stored,
+            onResume: ({ resuming, startIndex, totalSegments }) => {
+              if (resuming) {
+                progressTitle.textContent =
+                  `继续生成 ${i + 1}/${readyToGenerate.length}: ${ch.title}（从第 ${startIndex}/${totalSegments} 段接着做）`;
+              }
+            },
             translateTexts: sentenceModeTranslator(),
             onStatus: (msg) => { progressText.textContent = msg; },
             onProgress: (current, segTotal) => {
               tracker.advance(i + current / segTotal);
             },
-            onCheckpoint: (cpData) => { state.audioCheckpoints[idx] = cpData; },
+            onCheckpoint: (cpData) => recordCheckpoint(idx, cpData, persister),
           });
           recordAudioVariant(idx, mode, blob, timeline);
-          delete state.audioCheckpoints[idx];
-          persistAudio(idx);
+          clearCheckpoints(idx, mode, persister);
+          await persistAudio(idx);
         } catch (err) {
           if (err.message.includes('cancelled')) throw err;
           failures.push({ chapter: ch.title, phase: 'generate', error: err.message });
@@ -1297,7 +1376,11 @@ async function generateMultipleChapters(indices) {
     }
   } finally {
     state.generating = false;
+    await wakeLock.release();
     hideProgress();
+    // Repaint so interrupted chapters show "已中断 (n/N)" rather than looking
+    // untouched — the whole reason a dead run read as a finished one.
+    renderChapterList();
   }
 }
 
@@ -1713,14 +1796,28 @@ function persistBook() {
   }).catch(err => console.warn('Failed to save book to library:', err));
 }
 
-/** Persist one chapter's generated audio — fire-and-forget. */
-function persistAudio(idx) {
+/**
+ * Persist one chapter's generated audio.
+ *
+ * Awaited and surfaced rather than fire-and-forget: a silent write failure
+ * meant a chapter that really had been generated still showed "还没有生成音频"
+ * on publish, with nothing telling the user why.
+ */
+async function persistAudio(idx, { context = 'generate' } = {}) {
   if (!state.bookId) return;
-  saveChapterAudio(state.bookId, idx, {
-    blob: state.audioBlobs[idx],
-    timeline: state.audioTimelines[idx] || null,
-    audioMode: state.audioModes[idx] || null,
-  }).catch(err => console.warn('Failed to save audio to library:', err));
+  try {
+    await saveChapterAudio(state.bookId, idx, {
+      blob: state.audioBlobs[idx],
+      timeline: state.audioTimelines[idx] || null,
+      audioMode: state.audioModes[idx] || null,
+    });
+  } catch (err) {
+    console.warn('Failed to save audio to library:', err);
+    showToast(context === 'download'
+      ? `⚠️ 第 ${idx + 1} 章已下载但离线缓存失败（${err.message}）— 关闭页面后需要重新下载`
+      : `⚠️ 第 ${idx + 1} 章音频已生成，但保存到本地库失败（${err.message}）— 刷新页面会丢失，请先下载 MP3`,
+      'error', 10000);
+  }
 }
 
 /**
@@ -1742,6 +1839,26 @@ async function restoreBookAudio(bookId) {
       state.audioModes[rec.chapterIndex] = mode;
     }
     if (records.length > 0) updateBulkButtons();
+  } catch { /* persistence unavailable */ }
+
+  // Partially-generated chapters. Restoring these is what turns "regenerate"
+  // into "resume" across a reload, a tab discard, or a trip back to the shelf.
+  try {
+    const partials = await getBookAudioCheckpoints(bookId);
+    for (const rec of partials) {
+      // Skip any chapter/mode that finished after the checkpoint was written.
+      if (state.audioVariants[rec.chapterIndex]?.[rec.audioMode]) {
+        deleteAudioCheckpoint(bookId, rec.chapterIndex, rec.audioMode).catch(() => {});
+        continue;
+      }
+      setAudioCheckpoint(state, rec.chapterIndex, rec.audioMode, {
+        completedIndex: rec.completedIndex,
+        totalSegments: rec.totalSegments,
+        audioMode: rec.audioMode,
+        audioBlobs: rec.audioBlobs || [],
+      });
+    }
+    if (partials.length > 0) renderChapterList();
   } catch { /* persistence unavailable */ }
 }
 
@@ -2073,7 +2190,7 @@ async function ensureChapterAudio(idx, mode) {
       state.remoteId, meta.timelineFile, import.meta.env.BASE_URL, { signal: _audioDownloadAbort.signal }
     ).catch(() => null);
     recordAudioVariant(idx, mode, blob, timeline);
-    persistAudio(idx); // cache for offline replay
+    persistAudio(idx, { context: 'download' }); // cache for offline replay
     if (state.activeChapter === idx) updateChapterButtons(idx);
     updateChapterRow(idx);
     return true;
@@ -2187,6 +2304,16 @@ function renderPlayerChapterList() {
     playerChapterList.appendChild(li);
   });
 }
+
+// Warn before a reload/close throws away an in-flight run. This only WARNS —
+// browsers do not wait for async IndexedDB writes during unload, so durability
+// comes from checkpointing as we go, not from this handler.
+window.addEventListener('beforeunload', (e) => {
+  if (!shouldWarnBeforeUnload(state)) return;
+  e.preventDefault();
+  e.returnValue = '';
+  return '';
+});
 
 // Save progress when the app is backgrounded or closed mid-playback
 document.addEventListener('visibilitychange', () => {

@@ -774,3 +774,123 @@ Verified live in the browser: entering fullscreen from both full-text and subtit
 4. **确认内容短的情况（登录卡片）依然正常：** 在一个 1198px 的宽视口里，`.upload-container` 依然被 `max-width: 480px` 限制住并完美居中（`left: 359px` = `(1198-480)/2`）——这次修复只是去掉了"强制最小宽度"，不影响原有的最大宽度限制和内容能放下时的居中效果。
 5. **验证顺序：** 先在动手改代码之前，用写入 IndexedDB 的模拟数据在全新的 iframe 里精确复现了这个 bug；通过往同一个复现环境注入实时样式覆盖，证明了这个 CSS 修复确实有效；跑了完整测试套件（360 个全部通过——纯 CSS 改动）并做了生产构建；部署到了 audiobook.tumei.online；部署后在一个全新的 390px 宽 iframe 里对着线上环境重新验证（确认新的 CSS 哈希 `index-DswqdNXI.css` 已经在线上生效，`.upload-container` 完全贴合视口、没有任何溢出）；也重新验证了宽视口下居中的情况依然正常；最后清理掉了写入 IndexedDB 的 4 条模拟播放记录，避免测试账号的真实数据被污染。
 360 个测试通过。已部署 audiobook.tumei.online 并推送 GitHub。
+
+---
+
+## Fix: audio generation restarted from scratch after every interruption (TDD)
+
+### Symptom
+
+Upload a book on `audiobook.tumei.online`, start generation (translate → synthesize),
+come back later: the screen shows nothing, "Publish to website" reports "还没有生成音频",
+and regenerating starts from segment 0 instead of resuming.
+
+### Root causes
+
+Resume was half-implemented: the *read* side existed (`generateChapterAudio`
+accepted `startIndex` / `existingBlobs`) but the *write* side never did.
+
+1. **The default audio mode had no checkpoint at all.** `en-zh-en-sentence` is
+   `selected` in `index.html` and is excluded from the pre-translation guard in
+   `main.js`, so it translates the whole chapter inside `generateChapterAudio`
+   *before* the segment loop starts — the phase that emits checkpoints. An
+   interruption there had nothing to resume from, even with the tab alive.
+2. **Batch results were discarded on failure.** `translateTexts` accumulated
+   every batch in a local array and only returned at the end; the caller cached
+   only on success. A 1500-sentence chapter is 60 batches, so failing on batch
+   40 threw away 1000 good sentences.
+3. **Audio checkpoints lived only in the JS heap.** `state.audioCheckpoints`
+   was a plain object; IndexedDB had no store for it. A reload, a tab discard,
+   or reopening the book from the shelf wiped every synthesized segment.
+4. **Partial audio was never written.** `persistAudio` ran only after the whole
+   chapter's concatenated MP3 existed, so a chapter interrupted at 90% left
+   zero bytes on disk.
+5. **`src/checkpoint.js` was dead code** — imported only by its own test.
+6. **Failure was invisible.** The single-chapter `catch` never repainted the
+   chapter row, `finally { hideProgress() }` removed the progress bar, and the
+   error toast auto-dismissed. A dead run looked exactly like a finished one.
+7. **Latent:** checkpoints were keyed by chapter index only (cross-mode resume
+   spliced two different segment lists), and `audioBlobs.length = 0` mutated
+   the same array the last checkpoint held by reference.
+
+### Changes (test-first)
+
+| Area | Change |
+|---|---|
+| `ms-translator.js` | `translateTexts` gains `onBatch(texts, translations, offset)`, fired per successful batch. `translateChapter` gains `getCached`/`putCached` and consults the persistent cache. |
+| `cached-translator.js` *(new)* | `createCachingTranslator` — reads through the cache, writes **each batch** immediately. For sentence mode the cache *is* the checkpoint, so it now survives a reload. |
+| `audio-checkpoint-store.js` *(new)* | Flush policy (`shouldFlushCheckpoint`), staleness/mode validation (`isResumable`, `resumePlan`), throttled writer (`createSegmentPersister`) that gives up after repeated quota failures. |
+| `db.js` | v4: `audioCheckpoints` store keyed `[bookId, chapterIndex, audioMode]`, plus cascade delete. |
+| `edge-tts.js` | Injectable `synthesize`; checkpoints are snapshots carrying `audioMode`; new validated `checkpoint`/`onResume` options; `onCheckpoint` is awaited for write backpressure. |
+| `app-state.js` | Checkpoints keyed by (chapter, mode) with accessors + `audioCheckpointSummary`. |
+| `generation-guard.js` *(new)* | `shouldWarnBeforeUnload` and a degrade-safe Wake Lock wrapper. |
+| `main.js` | Restores checkpoints on book open; per-chapter persister; "⚠️ 已中断 n/N" row badge; repaint on failure; `beforeunload` warning; wake lock around runs; `persistAudio` failures surfaced. |
+
+### Note on limits
+
+`beforeunload` only **warns** — browsers do not wait for async IndexedDB writes
+during unload, so durability comes from checkpointing as generation proceeds.
+Wake Lock is a mitigation, not a fix. Segment blobs can reach hundreds of MB on
+a long book; the checkpoint is deleted as soon as the chapter's full MP3 lands,
+and the persister stops writing (with a toast) after repeated quota failures.
+
+### Verification
+
+`npx vitest run` — 441 passed (baseline 360, +81 new). `npx vite build` clean.
+
+---
+
+## 修复：音频生成每次中断后都从头开始（TDD）
+
+### 现象
+
+在 `audiobook.tumei.online` 上传书籍后开始生成（先翻译再合成），过一段时间回来，
+界面什么都没有；点"发布到网站"提示"还没有生成音频"；点重新生成又从第 0 段开始。
+
+### 根因
+
+断点续传只做了一半：**读**的那一半写好了（`generateChapterAudio` 接受
+`startIndex` / `existingBlobs`），**存**的那一半从来没实现。
+
+1. **默认模式根本没有断点。** `en-zh-en-sentence` 在 `index.html` 里是 `selected`，
+   且被排除在 `main.js` 的翻译前置判断之外，于是它在 `generateChapterAudio` 内部、
+   在会发出断点的合成循环**开始之前**把整章逐句翻完。中断在这个阶段，即使标签页还活着
+   也无进度可续。
+2. **批次成果在失败时被丢弃。** `translateTexts` 把每批结果攒在局部数组里，只在全部
+   成功后才返回，调用方也只在成功后写缓存。一章 1500 句 = 60 批，第 40 批失败就丢掉
+   前面 1000 句。
+3. **音频断点只在内存。** `state.audioCheckpoints` 是普通对象，IndexedDB 没有对应的
+   store。刷新、标签页被回收、或退回书架重开，已合成的分段全部蒸发。
+4. **分段音频从不落盘。** `persistAudio` 只在整章 MP3 拼好后才执行，所以一章做到 90%
+   被打断 = 磁盘 0 字节。
+5. **`src/checkpoint.js` 是死代码** —— 只有它自己的测试文件 import 它。
+6. **失败是隐形的。** 单章 `catch` 不重绘章节行，`finally { hideProgress() }` 收掉
+   进度条，错误 toast 自动消失。**死掉的运行和跑完的运行长得一模一样。**
+7. **潜在隐患：** 断点只按章节索引分键（跨模式续传会拼接两套不同的分段表）；
+   `audioBlobs.length = 0` 清空的正是最后一个断点按引用持有的那个数组。
+
+### 改动（先写测试）
+
+| 位置 | 改动 |
+|---|---|
+| `ms-translator.js` | `translateTexts` 增加 `onBatch(texts, translations, offset)`，每批成功即回调。`translateChapter` 增加 `getCached`/`putCached`，接上持久化缓存。 |
+| `cached-translator.js`（新） | `createCachingTranslator` —— 读穿缓存，**每批立即写盘**。逐句模式下缓存即断点，因此现在能跨刷新续传。 |
+| `audio-checkpoint-store.js`（新） | 落盘节奏（`shouldFlushCheckpoint`）、陈旧/错模式校验（`isResumable`、`resumePlan`）、限流写入器（`createSegmentPersister`），连续配额失败后放弃并提示。 |
+| `db.js` | 升到 v4：新增 `audioCheckpoints` store，键 `[bookId, chapterIndex, audioMode]`，并加入级联删除。 |
+| `edge-tts.js` | 可注入 `synthesize`；断点改为快照并带上 `audioMode`；新增经校验的 `checkpoint`/`onResume` 选项；`onCheckpoint` 改为 await 以形成写入背压。 |
+| `app-state.js` | 断点按 (章节, 模式) 分键，配套访问器与 `audioCheckpointSummary`。 |
+| `generation-guard.js`（新） | `shouldWarnBeforeUnload` 与静默降级的 Wake Lock 包装。 |
+| `main.js` | 打开书时恢复断点；每章一个持久化器；章节行显示"⚠️ 已中断 n/N"；失败时重绘；`beforeunload` 提示；生成期间加 Wake Lock；`persistAudio` 失败会明确告知。 |
+
+### 必须说清的限制
+
+`beforeunload` **只能提醒**，不能保证保存 —— 浏览器不会等待卸载期间的异步 IndexedDB
+写入，所以持久性来自"边生成边写"。Wake Lock 是缓解措施，不是根治。长书的分段 blob
+可能累积到数百 MB：整章 MP3 落盘后断点会立即删除，且连续配额失败后写入器会停止并弹提示。
+
+### 验证方式
+
+`npx vitest run` —— 441 通过（基线 360，新增 81）。`npx vite build` 无报错。
+
+自己验证：打开一本书开始生成，中途刷新页面，重新打开这本书 —— 章节行应显示
+"⚠️ 已中断 n/N"，按钮显示"继续生成 (n/N)"，点下去从第 n 段接着做，不会从头再来。
