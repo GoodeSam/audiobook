@@ -1260,14 +1260,18 @@ async function generateSingleChapter(idx) {
     if (!err.message.includes('cancelled')) {
       showToast('Audio generation error: ' + err.message, 'error');
     }
-    // Repaint so the row shows "已中断 (n/N)" — without this a dead run was
-    // visually identical to a finished one, which is what made the user think
-    // generation had completed.
-    renderChapterList();
   } finally {
+    // Order matters: the row renderer branches on `state.generating`, so a
+    // repaint issued from `catch` — which runs BEFORE `finally` — painted
+    // "Generating..." and then nothing repainted again, leaving a dead run
+    // looking like a live one forever. Clear the flag first, then paint, the
+    // way generateMultipleChapters already does.
     state.generating = false;
     await wakeLock.release();
     hideProgress();
+    // Shows "⚠️ 已中断 (n/N)" after a failure and the finished state after a
+    // success, from one place.
+    renderChapterList();
   }
 }
 
