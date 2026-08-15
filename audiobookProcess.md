@@ -1034,3 +1034,78 @@ blocked/超时/versionchange 三条路径、挂起写入路径，以及第 1 段
 手工验证：用两个标签页打开本站，在其中一个里生成，确认它现在会报告数据库被占用，
 而不是默默地什么都不产出。然后关掉其他标签页，开始生成，跑几段后杀掉标签页再重开这本书 ——
 即使完成的段数不到 20，章节行也应显示"⚠️ 已中断 n/N"。
+
+---
+
+## Root cause confirmed in a real browser (two tabs, real IndexedDB)
+
+The earlier report on the blocked-upgrade fix said plainly that the root cause
+was inferred from reading code and never confirmed against a real device. It is
+confirmed now. This entry corrects that record.
+
+jsdom cannot answer this question — it has no IndexedDB, and the unit test in
+`db.test.js` fakes the `blocked` event rather than provoking it. So the check
+was run in real Chrome against a local dev server on `localhost:5199`, never
+against production: IndexedDB versions only go up, so upgrading the live
+database would have made the deployed app permanently unable to open it.
+
+**What was observed.** With the app running in tab A and an extra raw
+connection held open at v4 with no `versionchange` handler — which is exactly
+how the app behaved before the fix — tab B called
+`indexedDB.open('audiobook-app', 5)`. After three seconds the only event fired
+was `blocked`: no `success`, no `error`, no `upgradeneeded`. The request simply
+sat there. That is the hang, reproduced: a promise that never settles, which
+the pre-fix `openDatabase()` had no handler for, and which froze the synthesis
+loop at its first awaited checkpoint write.
+
+Releasing the raw connection let the upgrade complete immediately
+(`readyState: "done"`, version 5). This is also indirect proof that the
+`onversionchange` fix works: the app's *own* v4 connection was still open in tab
+A, and had it not closed itself the upgrade would have stayed blocked.
+
+**The user-visible path was verified too.** With the database left at v5, the
+app (which opens at v4) rejected in 1ms with `VersionError` instead of hanging,
+and clicking Generate produced the abort toast — "⚠️ 无法访问本地存储… 已中止。
+请关闭本站的其他标签页后刷新重试" — with `state.generating` false and the
+progress overlay never shown.
+
+**What this does not settle.** It proves the mechanism and the fix; it does not
+prove this specific mechanism is what bit the reporting device, since that
+device's IndexedDB was never inspected. The schema check did pass in a real
+browser: version 4 with all six stores including `audioCheckpoints`.
+
+Cleanup: the test database and localStorage were deleted and the dev server
+stopped. No production data was touched. No code changed.
+
+## 根因已在真实浏览器中证实（双标签页、真实 IndexedDB）
+
+之前那份关于"升级被阻塞"的报告明确写了：根因是通读代码推断出来的，从未对着真实
+设备验证过。现在证实了，本条更正该记录。
+
+jsdom 回答不了这个问题——它没有 IndexedDB，而 `db.test.js` 里的单元测试是**伪造**
+`blocked` 事件而不是真正触发它。因此这次检验在真实 Chrome 中针对本地 dev server
+（`localhost:5199`）进行，**绝不针对生产环境**：IndexedDB 的版本号只能升不能降，
+把线上数据库升上去会让已部署的应用永久打不开它。
+
+**观察到什么。** 应用在 tab A 运行，同时手工持有一个 v4 的裸连接且**不挂载**
+`versionchange` 处理函数——这正是修复前应用的行为——然后 tab B 执行
+`indexedDB.open('audiobook-app', 5)`。三秒之后，唯一触发的事件是 `blocked`：
+没有 `success`，没有 `error`，没有 `upgradeneeded`。请求就那么悬着。**挂起被复现了**：
+一个永不结算的 Promise，正是修复前 `openDatabase()` 无人监听的那条路径，也正是它
+把合成循环冻死在第一次等待断点写入的地方。
+
+释放那个裸连接后，升级立即完成（`readyState: "done"`，版本 5）。这同时是
+`onversionchange` 修复生效的**间接证据**：tab A 里应用**自己**的 v4 连接当时仍然开着，
+如果它没有主动关闭，升级会继续被挡住。
+
+**用户可见路径也验证了。** 在数据库停留于 v5 的状态下，应用（打开 v4）在 1 毫秒内
+以 `VersionError` reject 而不是挂起；点击"生成"弹出中止提示——"⚠️ 无法访问本地存储…
+已中止。请关闭本站的其他标签页后刷新重试"——`state.generating` 为 false，
+进度浮层从未出现。
+
+**这不能证明什么。** 它证明了机制成立、修复有效；但它**不能**证明出问题的那台设备
+就是被这个机制咬到的，因为那台设备的 IndexedDB 从未被检查过。schema 检查确实在真实
+浏览器中通过了：版本 4，六个 store 齐全，包含 `audioCheckpoints`。
+
+清理：测试数据库与 localStorage 已删除，dev server 已停止。未触碰任何生产数据，
+未改动任何代码。
