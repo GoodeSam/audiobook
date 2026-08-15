@@ -894,3 +894,19 @@ and the persister stops writing (with a toast) after repeated quota failures.
 
 自己验证：打开一本书开始生成，中途刷新页面，重新打开这本书 —— 章节行应显示
 "⚠️ 已中断 n/N"，按钮显示"继续生成 (n/N)"，点下去从第 n 段接着做，不会从头再来。
+
+### Follow-up: removed the dead checkpoint module
+
+`src/checkpoint.js` and `src/checkpoint.test.js` deleted. The module described a
+checkpoint data model but was imported only by its own test — the resume logic
+that replaced it now lives in `audio-checkpoint-store.js`, keyed by audio mode
+and actually persisted. Build output hash is unchanged (`index-2Q7Er3TN.js`),
+confirming the module was never in the bundle graph. Tests: 429 passing
+(441 minus that file's 12).
+
+### 后续：删除死代码 checkpoint 模块
+
+删除 `src/checkpoint.js` 与 `src/checkpoint.test.js`。该模块定义了一套断点数据结构，
+但只有它自己的测试 import 它；取代它的续传逻辑现在在 `audio-checkpoint-store.js`，
+按音频模式分键且真正落盘。构建产物哈希未变（`index-2Q7Er3TN.js`），证明它从未进入
+打包图，线上无需重新部署。测试：429 通过（441 减去该文件的 12 个）。
