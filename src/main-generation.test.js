@@ -1,84 +1,28 @@
 /**
- * Feasibility spike: can main.js be driven from a test at all?
+ * Characterization tests for the generation and resume chain in main.js.
  *
- * main.js is 2915 lines with no tests, and it is where the recurring
- * generation/resume/publish bugs live. Before writing characterization tests
- * for that orchestration, this proves a harness is possible: real index.html
- * DOM, I/O leaves mocked, module imported for its side effects, then driven by
- * clicking the same buttons a user clicks.
+ * This is where the recurring bugs live: a run dies and the retry either
+ * restarts from zero or leaves the chapter looking untouched. Each test records
+ * one link in that chain so the coming extraction cannot quietly break it.
  *
- * Nothing in main.js changes to make this work — that is the point. A safety
- * net has to pin down the code as it is today, before any restructuring.
+ * Nothing in main.js was changed to make these possible — a safety net has to
+ * pin down the code as it is today, before any restructuring.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const indexHtml = readFileSync(resolve(here, '..', 'index.html'), 'utf8');
+import { bootApp } from './test-fixtures/app-harness.js';
 
 // Everything that touches the network, IndexedDB, or a WebSocket is mocked.
 // Each already has its own test file; what is under test here is the
-// orchestration that wires them together.
+// orchestration that wires them together. `vi.mock` is hoisted per file, so
+// these must be declared here rather than inside the harness.
 vi.mock('./db.js');
 vi.mock('./remote-library.js');
 vi.mock('./library-api.js');
 vi.mock('./edge-tts.js');
 vi.mock('./ms-translator.js');
+vi.mock('./publish-export.js');
 
-/** This jsdom build ships a non-functional localStorage, and main.js reads it
- *  at module scope — so a working one must exist before the import. */
-function installLocalStorage() {
-  const store = new Map();
-  Object.defineProperty(window, 'localStorage', {
-    configurable: true,
-    value: {
-      getItem: (k) => (store.has(k) ? store.get(k) : null),
-      setItem: (k, v) => store.set(k, String(v)),
-      removeItem: (k) => store.delete(k),
-      clear: () => store.clear(),
-    },
-  });
-}
-
-/**
- * Boot a fresh instance of the app.
- *
- * `resetModules` matters: main.js attaches 65 listeners at import time, so a
- * cached module plus a rebuilt DOM would leave every button dead.
- */
-async function boot({ admin = true } = {}) {
-  vi.resetModules();
-  installLocalStorage();
-  // Generation and publishing are admin actions. Without this the app boots
-  // into listener mode, where chapter rows render the listener view ("文本",
-  // "☁️ 可听") and never reach the admin status branches at all.
-  if (admin) window.localStorage.setItem('audiobook.adminMode', '1');
-
-  // The real app shell, so ids and structure match production exactly.
-  const body = indexHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i)[1];
-  document.body.innerHTML = body.replace(/<script[\s\S]*?<\/script>/gi, '');
-
-  const db = await import('./db.js');
-  const remote = await import('./remote-library.js');
-  const edgeTts = await import('./edge-tts.js');
-
-  db.listUsers.mockResolvedValue([{ id: 'u1', name: 'Default' }]);
-  db.createUser.mockResolvedValue({ id: 'u1', name: 'Default' });
-  db.listBooks.mockResolvedValue([]);
-  db.getBookAudio.mockResolvedValue([]);
-  db.getBookAudioCheckpoints.mockResolvedValue([]);
-  db.openDatabase.mockResolvedValue({});
-  db.saveChapterAudio.mockResolvedValue(undefined);
-  remote.fetchCatalog.mockResolvedValue({ books: [] });
-  remote.visibleBooks.mockReturnValue([]);
-  remote.isKnownCode.mockReturnValue(false);
-  edgeTts.validateVoiceSettings.mockReturnValue(null);
-
-  await import('./main.js');
-  return { db, remote, edgeTts, ...window.__audiobook };
-}
+const boot = bootApp;
 
 afterEach(() => {
   vi.clearAllMocks();
