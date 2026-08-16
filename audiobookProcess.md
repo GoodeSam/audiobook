@@ -1206,3 +1206,77 @@ DOM，把 I/O 叶子模块换成假的，然后像用户一样点真实按钮驱
 还原后恢复绿。**一个从不失败的测试不是测试。**
 
 测试：472 通过（本轮工作开始时为 439）。
+
+---
+
+## Translation showed no progress at all: Microsoft's free token endpoint is gone
+
+**Reported:** translating one chapter produced no progress whatsoever. Verified
+by reproducing it in a real browser rather than reasoning about it: six seconds
+after clicking Translate the overlay was up, the progress text was empty, the
+percentage read 0%, `state.generating` was still true, and no error had
+appeared.
+
+**Root cause, external:** `https://edge.microsoft.com/translate/auth` now
+answers **404 with an empty body**. Checked twice in a row, so not a blip. The
+translate endpoint itself is reachable (401 without a token, 1.7s), and Google's
+free endpoint answered correctly in 1.6s — so the network was fine and one
+provider was working the whole time.
+
+**Three defects of ours turned that outage into silence:**
+
+1. A failing token fetch was classified as a transient network error and
+   retried on [1,3,5,10,15]s. That path never called `onWait`, so the UI showed
+   nothing for 34 seconds and then failed.
+2. The Google fallback was gated on `resp.status === 429`. A thrown token fetch
+   never assigns `resp`, so the fallback was unreachable precisely when
+   Microsoft was most broken — while Google sat there working.
+3. Every batch repeated the whole doomed sequence from scratch.
+
+**Fixes.** `tryGoogle()` is now shared by both paths, so Google is attempted
+whenever Microsoft is unusable for *any* reason, not only 429. A session flag
+records that Microsoft failed outright and sends later batches straight to
+Google, clearing itself if Google turns out to be down too, so a stale verdict
+cannot strand the app on a dead provider. Transient retries now report through
+`onWait` with a `reason` argument, and the UI distinguishes "⚠️ 翻译服务暂时无
+响应，N 秒后重试" from the 429 message — silence is indistinguishable from a
+hang, and that is exactly how this presented.
+
+**Verified end to end in a real browser**, not just under mocks: the same
+12-paragraph chapter that previously sat at empty/0% after six seconds now
+completes in 2.4s with "Translating: 12 / 12 paragraphs" and correct Chinese
+output, via the Google fallback.
+
+Tests: 485 passing (was 480; +5 for the outage paths).
+
+## 翻译没有任何进度：微软的免费 token 端点已经消失
+
+**现象：** 翻译某一章时完全没有进度。没有靠推理下结论，而是在真实浏览器里复现：
+点击翻译六秒后，进度浮层在、进度文字为空、百分比 0%、`state.generating` 仍为 true、
+没有任何报错。
+
+**根因在外部：** `https://edge.microsoft.com/translate/auth` 现在返回
+**404，响应体为空**。连查两次，不是抖动。翻译接口本身可达（不带 token 返回 401，
+1.7 秒），Google 的免费接口 1.6 秒正确返回——也就是说网络一直是好的，
+而且自始至终有一个可用的服务商在那儿。
+
+**我们自己的三处缺陷把这次外部故障变成了"静默"：**
+
+1. token 获取失败被归类为瞬时网络错误，按 [1,3,5,10,15] 秒重试。
+   而这条路径**从不调用 `onWait`**，于是界面 34 秒毫无动静，然后失败。
+2. Google 备用被 `resp.status === 429` 门控。token 抛异常时 `resp` 根本没赋值，
+   于是**恰恰在微软坏得最彻底的时候，备用路径不可达**——而 Google 一直好着。
+3. 每一批都把这套注定失败的流程从头再走一遍。
+
+**修复。** `tryGoogle()` 现在被两条路径共用，只要微软因**任何原因**不可用就尝试
+Google，不再只认 429。一个会话级标志记录"微软已彻底失败"，让后续批次直接走 Google；
+若 Google 也不通则自动清除该标志，避免被一个过期判断困死在坏掉的服务商上。
+瞬时重试现在通过 `onWait` 上报并带 `reason` 参数，界面区分
+"⚠️ 翻译服务暂时无响应，N 秒后重试"与 429 提示——**静默和挂死在用户眼里没有区别**，
+而这次正是以静默的形式出现的。
+
+**在真实浏览器里做了端到端验证**，不只是在 mock 下：同样的 12 段章节，此前六秒后
+仍停在空白/0%，现在 2.4 秒完成，显示"Translating: 12 / 12 paragraphs"，
+中文输出正确，走的是 Google 备用。
+
+测试：485 通过（原 480，新增 5 个覆盖故障路径）。

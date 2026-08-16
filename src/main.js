@@ -1107,11 +1107,13 @@ function sentenceModeTranslator() {
     onCacheTiming: timingHooks().onCacheTiming,
     translateOptions: {
       onBatchTiming: timingHooks().onBatchTiming,
-      onWait: (seconds, attempt) => {
-        progressText.textContent = `⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 已翻译的句子已保存，不会重来`;
+      onWait: (seconds, attempt, reason) => {
+        progressText.textContent = reason === 'retry'
+          ? `⚠️ 翻译服务暂时无响应，${seconds} 秒后重试（第 ${attempt} 次）— 已翻译的句子已保存，不会重来`
+          : `⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 已翻译的句子已保存，不会重来`;
       },
       onFallback: () => {
-        progressText.textContent = '⚡ 微软翻译限流 — 已自动切换 Google 翻译继续';
+        progressText.textContent = '⚡ 微软翻译不可用 — 已自动切换 Google 翻译继续';
       },
       onChunk: (done, total) => {
         progressText.textContent = `正在逐句翻译 ${done} / ${total} 句…`;

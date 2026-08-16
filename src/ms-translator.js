@@ -20,6 +20,9 @@ const BATCH_INTERVAL_MS = 350; // pause between batch calls to stay under the ra
 
 let _cachedToken = null;
 let _tokenExpiry = 0;
+// Set once Microsoft proves unusable this session (its free token endpoint has
+// disappeared before), so later batches skip it instead of re-paying the wait.
+let _msUnavailable = false;
 let _cancelled = false;
 let _abortController = null;
 
@@ -97,7 +100,33 @@ export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}
   const maxRetries = opts.maxRetries ?? MAX_RETRIES;
   const rateLimitDelays = opts.rateLimitDelays ?? RATE_LIMIT_DELAYS;
 
-  const transientDelayFor = (attempt) => TRANSIENT_DELAYS[attempt] ?? TRANSIENT_DELAYS[TRANSIENT_DELAYS.length - 1];
+  const transientDelays = opts.transientDelays ?? TRANSIENT_DELAYS;
+  const transientDelayFor = (attempt) => transientDelays[attempt] ?? transientDelays[transientDelays.length - 1];
+
+  /**
+   * Translate this batch with Google instead. Returns null when Google is
+   * unusable too, so callers can fall through to Microsoft's retry ladder.
+   */
+  const tryGoogle = async () => {
+    if (opts.noGoogleFallback === true) return null;
+    try {
+      const result = await googleTranslateBatch(texts, from, to, opts.googleFetchFn || fetchFn);
+      if (opts.onFallback) opts.onFallback('google');
+      return result;
+    } catch {
+      return null;
+    }
+  };
+
+  // Microsoft already failed outright this session. Repeating the doomed auth
+  // sequence for every batch is pure latency, so go straight to Google — and if
+  // Google is down too, clear the flag and give Microsoft another chance rather
+  // than staying stuck on a stale verdict.
+  if (_msUnavailable) {
+    const viaGoogle = await tryGoogle();
+    if (viaGoogle) return viaGoogle;
+    _msUnavailable = false;
+  }
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const signal = _abortController?.signal;
@@ -107,6 +136,7 @@ export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}
 
     let resp;
     try {
+      if (_msUnavailable) throw new Error('Microsoft translate marked unavailable this session');
       const token = await msGetAuthToken(fetchFn);
       const params = new URLSearchParams({ 'api-version': '3.0', to });
       if (from && from !== 'auto') {
@@ -122,11 +152,25 @@ export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}
         ...(signal ? { signal } : {}),
       });
     } catch (err) {
-      // Network failure (offline, DNS, connection reset, aborted) — retry
-      // like any other transient error instead of bypassing the retry loop.
+      // Microsoft is unusable: offline, DNS, connection reset — or its free
+      // token endpoint has gone away, which is what actually happened
+      // (edge.microsoft.com/translate/auth started answering 404 with an empty
+      // body). Google needs no token, so try it before burning the retry
+      // ladder. Previously this path could not reach the fallback at all: it
+      // was gated on `resp.status === 429`, and a throw here never assigns
+      // `resp`. The result was 34 seconds of silent retries and then failure,
+      // while a working provider sat unused.
       if (err.name === 'AbortError') throw err;
+      const viaGoogle = await tryGoogle();
+      if (viaGoogle) {
+        _msUnavailable = true;
+        return viaGoogle;
+      }
       if (attempt === maxRetries) throw new Error(`Microsoft Translate network error: ${err.message}`);
-      await abortableSleep(transientDelayFor(attempt));
+      const wait = transientDelayFor(attempt);
+      // Never wait silently — silence is indistinguishable from a hang.
+      if (opts.onWait) opts.onWait(Math.round(wait / 1000), attempt + 1, 'retry');
+      await abortableSleep(wait);
       continue;
     }
 
@@ -145,12 +189,10 @@ export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}
 
     // Microsoft rate-limited us — switch to Google's free endpoint for this
     // batch instead of waiting out the (often long) limit window.
-    if (resp.status === 429 && opts.noGoogleFallback !== true) {
-      try {
-        const result = await googleTranslateBatch(texts, from, to, opts.googleFetchFn || fetchFn);
-        if (opts.onFallback) opts.onFallback('google');
-        return result;
-      } catch { /* Google unreachable — fall through to normal MS retries */ }
+    if (resp.status === 429) {
+      const viaGoogle = await tryGoogle();
+      if (viaGoogle) return viaGoogle;
+      // Google unreachable — fall through to normal MS retries.
     }
 
     // Retry on 401 (token expired), 429 (rate limit), 5xx (server error)
@@ -173,7 +215,8 @@ export async function translateBatch(texts, from, to, fetchFn = fetch, opts = {}
         : (rateLimitDelays[attempt] ?? rateLimitDelays[rateLimitDelays.length - 1]);
       if (opts.onWait) opts.onWait(Math.round(delay / 1000), attempt + 1);
     } else {
-      delay = TRANSIENT_DELAYS[attempt] ?? TRANSIENT_DELAYS[TRANSIENT_DELAYS.length - 1];
+      delay = transientDelayFor(attempt);
+      if (opts.onWait) opts.onWait(Math.round(delay / 1000), attempt + 1, 'retry');
     }
     await abortableSleep(delay);
   }
@@ -360,12 +403,16 @@ export async function translateChapter(markdown, from, to, options = {}) {
     const netStart = _now();
     const batchSize = batchTexts.length;
     const results = await translateBatch(batchTexts, from, to, fetchFn, {
-      onWait: (seconds, attempt) => {
+      onWait: (seconds, attempt, reason) => {
         rateLimitMs += seconds * 1000;
-        if (onStatus) onStatus(`⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 进度不会丢失`);
+        if (onStatus) {
+          onStatus(reason === 'retry'
+            ? `⚠️ 翻译服务暂时无响应，${seconds} 秒后重试（第 ${attempt} 次）— 进度不会丢失`
+            : `⏳ 翻译服务限流 (429)，${seconds} 秒后自动重试（第 ${attempt} 次）— 进度不会丢失`);
+        }
       },
       onFallback: () => {
-        if (onStatus) onStatus('⚡ 微软翻译限流 — 已自动切换 Google 翻译继续');
+        if (onStatus) onStatus('⚡ 微软翻译不可用 — 已自动切换 Google 翻译继续');
       },
     });
     if (onBatchTiming) {
@@ -474,4 +521,7 @@ export function resetTranslationState() {
 export function _clearTokenCache() {
   _cachedToken = null;
   _tokenExpiry = 0;
+  // Clearing the token means "try Microsoft properly again", so the
+  // session-level unavailable verdict goes with it.
+  _msUnavailable = false;
 }

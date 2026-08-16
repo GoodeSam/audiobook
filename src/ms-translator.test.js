@@ -582,3 +582,103 @@ describe('translateChapter translation cache', () => {
     expect(result).toBe('一。');
   });
 });
+
+/**
+ * Microsoft's free token endpoint (edge.microsoft.com/translate/auth) began
+ * returning 404 with an empty body — verified in a real browser, twice, while
+ * Google's endpoint answered normally in 1.6s.
+ *
+ * Three separate defects turned that outage into "translation shows no progress
+ * at all":
+ *   1. a failing token fetch was classified as a transient network error, so it
+ *      retried on [1,3,5,10,15]s — 34 seconds of complete silence, because that
+ *      path never called onWait;
+ *   2. the Google fallback was gated on `resp.status === 429`, and a thrown
+ *      token fetch never assigns `resp`, so Google was never reached even
+ *      though it was working;
+ *   3. every batch repeated the whole doomed sequence from scratch.
+ */
+describe('surviving a Microsoft outage', () => {
+  beforeEach(() => {
+    _clearTokenCache();
+    resetTranslationState();
+  });
+
+  const googleOk = (translations) => async () => ({
+    ok: true,
+    json: async () => translations,
+    text: async () => JSON.stringify(translations),
+  });
+
+  it('falls back to Google when the auth token cannot be fetched', async () => {
+    const fetchFn = mockFetch([errorResponse(404)]); // auth is down
+    const googleFetchFn = mockFetch([]);
+    googleFetchFn.calls = [];
+    const google = googleOk(['你好']);
+
+    const result = await translateBatch(['Hello'], 'en', 'zh-Hans', fetchFn, {
+      maxRetries: 1,
+      googleFetchFn: google,
+    });
+
+    expect(result).toEqual(['你好']);
+  });
+
+  it('reports the fallback so the UI can say what happened', async () => {
+    const fetchFn = mockFetch([errorResponse(404)]);
+    const onFallback = vi.fn();
+
+    await translateBatch(['Hello'], 'en', 'zh-Hans', fetchFn, {
+      maxRetries: 1,
+      googleFetchFn: googleOk(['你好']),
+      onFallback,
+    });
+
+    expect(onFallback).toHaveBeenCalledWith('google');
+  });
+
+  // Otherwise every batch pays the full doomed auth sequence again.
+  it('stops re-attempting Microsoft auth once it is known to be down', async () => {
+    const fetchFn = mockFetch([errorResponse(404)]);
+    const google = googleOk(['你好']);
+
+    await translateBatch(['Hello'], 'en', 'zh-Hans', fetchFn, {
+      maxRetries: 1, googleFetchFn: google,
+    });
+    const afterFirst = fetchFn.calls.length;
+    await translateBatch(['Hello'], 'en', 'zh-Hans', fetchFn, {
+      maxRetries: 1, googleFetchFn: google,
+    });
+
+    expect(fetchFn.calls.length).toBe(afterFirst);
+  });
+
+  // Silence is the actual reported symptom; retries must be visible.
+  it('announces a transient retry instead of waiting silently', async () => {
+    const onWait = vi.fn();
+    const fetchFn = mockFetch([errorResponse(500)]);
+
+    await expect(
+      translateBatch(['Hello'], 'en', 'zh-Hans', fetchFn, {
+        maxRetries: 1,
+        noGoogleFallback: true,
+        rateLimitDelays: [0],
+        transientDelays: [0],
+        onWait,
+      })
+    ).rejects.toThrow();
+
+    expect(onWait).toHaveBeenCalled();
+  });
+
+  it('still throws when both providers are unusable', async () => {
+    const fetchFn = mockFetch([errorResponse(404)]);
+    const googleFetchFn = async () => { throw new Error('google unreachable'); };
+
+    await expect(
+      translateBatch(['Hello'], 'en', 'zh-Hans', fetchFn, {
+        maxRetries: 0, googleFetchFn, transientDelays: [0],
+      })
+    ).rejects.toThrow();
+  });
+});
